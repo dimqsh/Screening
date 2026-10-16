@@ -2,7 +2,10 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 module.exports = async function (context) {
   if (context.electronPlatformName !== "darwin") return;
-  const bundle = path.join(context.appOutDir, "Capture Lab.app");
+  const bundle = path.join(
+    context.appOutDir,
+    `${context.packager.appInfo.productFilename}.app`,
+  );
   execFileSync(
     "/usr/bin/codesign",
     ["--force", "--deep", "--sign", "-", bundle],

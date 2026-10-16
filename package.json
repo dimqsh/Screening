@@ -1,7 +1,7 @@
 {
-  "name": "capture-lab",
-  "version": "0.2.0",
-  "description": "Multilingual local Whisper transcription and ChatGPT interview notes",
+  "name": "screening",
+  "version": "0.3.0",
+  "description": "Interview chat with local multilingual Whisper, ChatGPT and window snapshots",
   "main": "src/main.cjs",
   "private": true,
   "scripts": {
@@ -27,7 +27,7 @@
   "license": "MIT",
   "build": {
     "appId": "local.capturelab.prototype",
-    "productName": "Capture Lab",
+    "productName": "Screening",
     "directories": {
       "output": "dist"
     },
@@ -37,7 +37,8 @@
       "!node_modules/@openai/**/*",
       "LICENSE",
       "assets/models/**/*",
-      "assets/licenses/**/*"
+      "assets/licenses/**/*",
+      "assets/brand/**/*"
     ],
     "asar": true,
     "asarUnpack": [
@@ -64,9 +65,9 @@
       "hardenedRuntime": false,
       "entitlements": "scripts/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Capture Lab transcribes microphone speech locally when you start recording.",
-        "NSAudioCaptureUsageDescription": "Capture Lab transcribes the meeting audio you choose.",
-        "NSScreenCaptureUsageDescription": "Capture Lab uses screen access for system audio and capture-exclusion checks."
+        "NSMicrophoneUsageDescription": "Screening transcribes microphone speech locally when you start recording.",
+        "NSAudioCaptureUsageDescription": "Screening transcribes the meeting audio you choose.",
+        "NSScreenCaptureUsageDescription": "Screening captures a window only when you request a snapshot, and uses screen access for meeting audio and capture checks."
       },
       "extraResources": [
         {
@@ -102,7 +103,7 @@
       "createDesktopShortcut": true,
       "deleteAppDataOnUninstall": false
     },
-    "artifactName": "Capture-Lab-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Screening-${version}-${os}-${arch}.${ext}",
     "afterPack": "scripts/after-pack.cjs"
   }
 }

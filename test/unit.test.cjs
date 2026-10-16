@@ -37,3 +37,23 @@ test("speech detector rejects steady noise that Whisper can hallucinate on", asy
   }
   assert.equal(await gate.hasSpeech(noise), false);
 });
+
+test("follow-up prompts retain bounded conversation data and coding format", () => {
+  const history = Array.from({ length: 40 }, (_, i) => ({
+    role: i % 2 ? "assistant" : "user",
+    text: `turn-${i} ` + "x".repeat(4000),
+  }));
+  const prompt = buildPrompt({
+    question: "Now optimize it",
+    history,
+    interviewType: "coding",
+    hasImage: true,
+    notes: "My concrete example",
+  });
+  assert.match(prompt, /runnable code in a fenced code block/);
+  assert.match(prompt, /user-selected window screenshot is attached/);
+  assert.match(prompt, /turn-39/);
+  assert.doesNotMatch(prompt, /turn-0 /);
+  assert.ok(prompt.length < 28000);
+  assert.ok(prompt.includes(JSON.stringify("My concrete example")));
+});

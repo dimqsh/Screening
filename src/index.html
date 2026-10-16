@@ -7,7 +7,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'none'; worker-src 'self'"
     />
-    <title>Capture Lab</title>
+    <title>Screening</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body class="lab">
@@ -42,11 +42,15 @@
     </svg>
     <header class="titlebar">
       <span class="brand"
-        ><span class="brand-mark">c<span>l</span></span> Capture Lab</span
-      ><span class="version">0.2.0</span>
+        ><img class="brand-logo" src="../assets/brand/screening.png" alt="" />
+        Screening</span
+      ><span class="version">0.3.0</span>
     </header>
     <div class="app-shell">
       <aside class="sidebar">
+        <button id="new-chat" class="new-chat">
+          <span>＋</span><span data-i18n="newChat">Новая беседа</span>
+        </button>
         <nav aria-label="Navigation">
           <button class="nav active" data-view="interview">
             <svg><use href="#i-wave" /></svg
@@ -91,10 +95,32 @@
                 Слушайте вопрос. Соберите ответ своими словами.
               </p>
             </div>
-            <button class="secondary" data-action="compact">
-              <svg><use href="#i-window" /></svg
-              ><span data-i18n="compact">В маленькое окно</span>
-            </button>
+            <div class="heading-actions">
+              <label
+                class="sr-only"
+                for="interviewType"
+                data-i18n="interviewType"
+                >Тип интервью</label
+              ><select id="interviewType">
+                <option value="general" data-i18n="typeGeneral">
+                  Любое интервью
+                </option>
+                <option value="coding" data-i18n="typeCoding">Кодинг</option>
+                <option value="system" data-i18n="typeSystem">
+                  System design
+                </option>
+                <option value="behavioral" data-i18n="typeBehavioral">
+                  Поведенческое
+                </option>
+                <option value="case" data-i18n="typeCase">
+                  Кейс / продукт
+                </option>
+                <option value="hr" data-i18n="typeHr">HR</option></select
+              ><button class="secondary" data-action="compact">
+                <svg><use href="#i-window" /></svg
+                ><span data-i18n="compact">В маленькое окно</span>
+              </button>
+            </div>
           </header>
           <div class="record-toolbar">
             <label
@@ -131,32 +157,16 @@
             </button>
           </div>
           <div class="conversation-grid">
-            <section class="transcript-pane">
+            <section class="answer-pane chat-pane" aria-label="Chat">
               <div class="pane-heading">
-                <h2 data-i18n="transcript">Расшифровка</h2>
-                <span class="tag">Whisper · local</span>
-              </div>
-              <div id="transcript" class="transcript-scroll">
-                <div class="empty-state" id="transcript-empty">
-                  <svg class="large-icon"><use href="#i-wave" /></svg>
-                  <h3 data-i18n="speechEmpty">Здесь появится речь</h3>
-                  <p data-i18n="speechHint">
-                    Подготовьте Whisper, выберите звук и начните запись. Для
-                    голоса собеседника используйте системный звук.
-                  </p>
-                </div>
-              </div>
-            </section>
-            <section class="answer-pane">
-              <div class="pane-heading">
-                <h2 data-i18n="answer">Подсказка</h2>
+                <h2 data-i18n="chat">Беседа</h2>
                 <div class="answer-tools">
                   <select
                     id="answerLanguage"
                     class="language-select"
                     aria-label="Answer language"
-                  ></select
-                  ><button
+                  ></select>
+                  <button
                     id="copy-answer"
                     class="icon-button"
                     data-title-i18n="copy"
@@ -166,54 +176,124 @@
                   </button>
                 </div>
               </div>
-              <div class="answer-scroll">
-                <p id="answered-question" class="answered-question" hidden></p>
-                <div id="answer" class="answer-text">
-                  <div class="empty-state">
-                    <div class="answer-empty-mark">Aa</div>
-                    <h3 data-i18n="answerEmpty">Ответ на последний вопрос</h3>
-                    <p data-i18n="answerHint">
-                      Нажмите «Ответить» после вопроса или напишите его внизу.
-                      Ваш опыт можно добавить в «Мой контекст».
-                    </p>
-                    <kbd>⌘ / Ctrl ⇧ Enter</kbd>
-                  </div>
-                </div>
-              </div>
+              <div
+                id="chat"
+                class="chat-scroll"
+                role="log"
+                aria-label="Interview chat"
+              ></div>
               <div class="answer-footer">
                 <label class="inline-check"
                   ><input id="autoAnswer" type="checkbox" /><span
                     data-i18n="autoAnswer"
                     >Отвечать автоматически</span
                   ></label
-                ><button
+                >
+                <button
                   id="cancel-answer"
                   class="text-button"
                   hidden
                   data-i18n="cancel"
                 >
-                  Остановить</button
-                ><span id="ai-status"></span>
+                  Остановить
+                </button>
+                <span id="ai-status" role="status"></span>
               </div>
             </section>
+            <aside class="session-pane">
+              <div class="session-tabs">
+                <button
+                  class="tab active"
+                  data-session-tab="transcript"
+                  data-i18n="transcript"
+                >
+                  Расшифровка</button
+                ><button class="tab" data-session-tab="notes" data-i18n="notes">
+                  Заметки
+                </button>
+              </div>
+              <section id="session-transcript" class="session-content">
+                <div id="transcript" class="transcript-scroll"></div>
+              </section>
+              <section id="session-notes" class="session-content" hidden>
+                <label class="notes-setting"
+                  ><span data-i18n="notesEnabledLabel">Показывать заметки</span
+                  ><input id="notesEnabled" type="checkbox" role="switch"
+                /></label>
+                <div id="notes-editor" class="notes-editor">
+                  <textarea
+                    id="notes"
+                    maxlength="12000"
+                    data-placeholder-i18n="notesPlaceholder"
+                    aria-label="Interview notes"
+                  ></textarea>
+                  <label class="inline-check"
+                    ><input id="includeNotes" type="checkbox" /><span
+                      data-i18n="includeNotes"
+                      >Учитывать в ответах</span
+                    ></label
+                  >
+                </div>
+                <p
+                  id="notes-disabled"
+                  class="help"
+                  data-i18n="notesDisabled"
+                  hidden
+                >
+                  Заметки выключены. Текст сохранится до закрытия приложения.
+                </p>
+              </section>
+            </aside>
           </div>
           <form id="question-form" class="question-composer">
+            <div id="attachment" class="attachment" hidden>
+              <button
+                id="preview-attachment"
+                class="attachment-preview"
+                type="button"
+                data-title-i18n="previewImage"
+              >
+                <img id="attachment-image" alt="Selected window" /><span
+                  id="attachment-name"
+                ></span></button
+              ><button
+                id="remove-attachment"
+                class="icon-button"
+                type="button"
+                data-title-i18n="removeAttachment"
+                aria-label="Remove screenshot"
+              >
+                ×
+              </button>
+            </div>
             <textarea
               id="question"
-              rows="1"
+              rows="2"
               maxlength="16000"
               data-placeholder-i18n="questionPlaceholder"
-              placeholder="Напишите вопрос или ответьте на последние реплики…"
               aria-label="Interview question"
-            ></textarea
-            ><button id="ask" class="primary" type="submit">
-              <span data-i18n="ask">Ответить</span
-              ><svg><use href="#i-arrow" /></svg>
-            </button>
+            ></textarea>
+            <div class="composer-actions">
+              <button id="choose-window" type="button" class="composer-tool">
+                <svg><use href="#i-window" /></svg
+                ><span data-i18n="windowSnapshot">Снимок окна</span></button
+              ><button
+                id="paste-question"
+                type="button"
+                class="composer-tool"
+                data-i18n="paste"
+              >
+                Вставить текст</button
+              ><span class="composer-shortcut">⌘ / Ctrl Enter</span
+              ><button id="ask" class="primary" type="submit">
+                <span data-i18n="send">Отправить</span
+                ><svg><use href="#i-arrow" /></svg>
+              </button>
+            </div>
           </form>
           <p class="footnote" data-i18n="privacyHint">
-            Whisper работает локально. В ChatGPT передаются вопрос, последние
-            реплики и ваш контекст при запросе ответа.
+            Речь обрабатывается локально. В ChatGPT отправляются сообщения,
+            контекст и прикреплённый снимок.
           </p>
         </section>
         <section id="view-context" class="view settings-view">
@@ -416,6 +496,46 @@
             невидимость во всех программах и записях.
           </p>
         </section>
+        <span id="copy-status" class="sr-only" role="status"></span>
+        <dialog
+          id="window-picker"
+          class="window-dialog"
+          aria-labelledby="picker-title"
+        >
+          <header>
+            <div>
+              <h2 id="picker-title" data-i18n="chooseWindow">Выберите окно</h2>
+              <p class="help" data-i18n="snapshotHint">
+                Будет сделан один снимок. Он отправится вместе со следующим
+                сообщением.
+              </p>
+            </div>
+            <button
+              id="close-picker"
+              class="icon-button"
+              data-title-i18n="close"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </header>
+          <div id="window-list" class="window-list"></div>
+          <footer>
+            <span id="picker-status" role="status"></span
+            ><button id="refresh-windows" class="secondary" data-i18n="refresh">
+              Обновить
+            </button>
+          </footer>
+        </dialog>
+        <dialog
+          id="image-preview"
+          class="image-dialog"
+          aria-label="Screenshot preview"
+        >
+          <button id="close-image" class="secondary" data-i18n="close">
+            Закрыть</button
+          ><img id="full-image" alt="Window snapshot preview" />
+        </dialog>
         <div id="error" class="error-toast" role="alert" hidden></div>
       </main>
     </div>

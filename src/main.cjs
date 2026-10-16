@@ -9,6 +9,7 @@ const {
   systemPreferences,
   session,
   nativeImage,
+  clipboard,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
@@ -17,7 +18,9 @@ const os = require("node:os");
 const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
 
-app.setName("Capture Lab");
+app.setName("Screening");
+// Preserve the 0.2.0 settings and model cache when upgrading to the new product name.
+app.setPath("userData", path.join(app.getPath("appData"), "Capture Lab"));
 const verification = process.argv.includes("--verify");
 if (!verification && !app.requestSingleInstanceLock()) app.exit(0);
 const artifactDir = path.resolve(
@@ -40,8 +43,7 @@ const state = {
   clickThrough: false,
   visible: true,
   capturePath: "electron",
-  notes:
-    "Meeting agenda\n\n• Clarify the goal\n• Confirm open questions\n• Agree on the next step",
+  notes: "",
   result: null,
   testing: false,
   testCard: false,
@@ -107,13 +109,15 @@ function change(key, value) {
   }
   state[key] = value;
   if (key === "capturePath") state.result = null;
-  apply();
+  if (key === "notes") publish();
+  else apply();
   return snapshot();
 }
 function create(file, options) {
   const win = new BrowserWindow({
     show: false,
     backgroundColor: "#f5f4f0",
+    icon: path.join(__dirname, "..", "assets", "brand", "screening.png"),
     ...options,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -200,7 +204,7 @@ async function runCapture() {
     state.result = {
       outcome: "permission-needed",
       detail:
-        "Enable Screen & System Audio Recording for Capture Lab in macOS Settings, reopen the app, then run again. No capture was taken.",
+        "Enable Screen & System Audio Recording for Screening in macOS Settings, reopen the app, then run again. No capture was taken.",
       permission: permission(),
     };
     publish();
@@ -487,6 +491,179 @@ async function verify() {
       });
     }
   }
+  if (process.argv.includes("--screening-test")) {
+    await interview.request("setting", { key: "notesEnabled", value: false });
+    await delay(120);
+    const hiddenNotes = await overlay.webContents.executeJavaScript(
+      `document.querySelector('[data-overlay-tab="notes"]').hidden`,
+    );
+    check("Notes can be disabled without deleting their text", () => {
+      assert.equal(hiddenNotes, true);
+      assert.ok(state.notes.length);
+    });
+    await interview.request("setting", { key: "notesEnabled", value: true });
+    await delay(100);
+    check("Notes can be restored", () =>
+      assert.equal(interview.state.settings.notesEnabled, true),
+    );
+    const previousClipboard = clipboard.readText();
+    try {
+      clipboard.writeText("Unicode paste: Привет\n    return 42");
+      await lab.webContents.executeJavaScript(
+        `document.querySelector('#question').value=''; document.querySelector('#paste-question').click()`,
+      );
+      await delay(200);
+      const pasted = await lab.webContents.executeJavaScript(
+        `document.querySelector('#question').value`,
+      );
+      check("Paste button preserves Unicode and indentation", () =>
+        assert.equal(pasted, "Unicode paste: Привет\n    return 42"),
+      );
+      await lab.webContents.executeJavaScript(
+        `document.querySelector('#question').value=''`,
+      );
+      await assert.rejects(
+        interview.request("window-capture", "window:unknown:0"),
+      );
+      checks.push({ name: "Unknown window capture is rejected", passed: true });
+      if (process.argv.includes("--vision-test")) {
+        const fixture = new BrowserWindow({
+          width: 820,
+          height: 520,
+          title: "Screening coding fixture",
+          webPreferences: {
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
+        });
+        await fixture.loadURL(
+          "data:text/html;charset=utf-8," +
+            encodeURIComponent(
+              '<!doctype html><html><head><title>Screening coding fixture</title></head><body style="font:22px -apple-system,Segoe UI,sans-serif;padding:35px;background:#fff;color:#182333"><p style="font-size:12px;color:#777">SYNTHETIC INTERVIEW TASK</p><h1 style="font-size:30px">Pair sum</h1><p>Write a Python function that returns all unique pairs<br>from this list whose sum is 31.</p><pre style="padding:24px;background:#eff2f7;border-radius:8px">[4, 8, 15, 16, 23, 42]</pre><p>Use each list element at most once per pair.</p></body></html>',
+            ),
+        );
+        try {
+          fixture.show();
+          await delay(800);
+          const windows = await interview.request("windows");
+          const selected = windows.find(
+            (w) => w.name === "Screening coding fixture",
+          );
+          assert.ok(
+            selected,
+            "Synthetic window is available to the real OS picker",
+          );
+          // Show only the synthetic entry in the validation screenshot; other window previews stay private.
+          await lab.webContents.executeJavaScript(
+            `document.querySelector('#window-picker').showModal(); document.querySelector('#window-list').replaceChildren(); (()=>{ const b=document.createElement('button'); b.className='window-option'; const img=document.createElement('img'); img.src=${JSON.stringify(selected.thumbnail)}; const span=document.createElement('span'); span.textContent='Screening coding fixture'; b.append(img,span); document.querySelector('#window-list').append(b); })()`,
+          );
+          await fs.writeFile(
+            path.join(artifactDir, "window-picker.png"),
+            (await lab.webContents.capturePage()).toPNG(),
+          );
+          await lab.webContents.executeJavaScript(
+            `document.querySelector('#window-picker').close()`,
+          );
+          await interview.request("window-capture", selected.id);
+          check("Selected window creates a single readable attachment", () => {
+            assert.ok(
+              interview.state.attachment.dataUrl.startsWith(
+                "data:image/png;base64,",
+              ),
+            );
+            assert.ok(interview.state.attachment.width >= 800);
+          });
+          await interview.request("remove-attachment");
+          check("Pending screenshot can be removed before sending", () =>
+            assert.equal(interview.state.attachment, null),
+          );
+          await interview.request("window-capture", selected.id);
+          await interview.request("clear");
+          await interview.request("window-capture", selected.id);
+          await interview.request("setting", {
+            key: "interviewType",
+            value: "coding",
+          });
+          await interview.request("setting", {
+            key: "answerLanguage",
+            value: "ru",
+          });
+          await interview.request(
+            "answer",
+            "Прочитай задачу на прикреплённом снимке. Реши её на Python и перечисли найденные пары.",
+          );
+          check("Live ChatGPT reads the selected window image", () => {
+            assert.match(
+              interview.state.ai.answer,
+              /8[\s\S]{0,20}23|23[\s\S]{0,20}8/,
+            );
+            assert.match(
+              interview.state.ai.answer,
+              /15[\s\S]{0,20}16|16[\s\S]{0,20}15/,
+            );
+            assert.match(interview.state.ai.answer, /```/);
+            assert.equal(interview.state.attachment, null);
+          });
+          await interview.request(
+            "answer",
+            "Теперь измени целевую сумму на 46. Используй тот же исходный список. Какие пары получатся?",
+          );
+          check("Follow-up uses the preceding conversation", () => {
+            assert.equal(interview.state.messages.length, 4);
+            assert.match(
+              interview.state.ai.answer,
+              /4[\s\S]{0,20}42|42[\s\S]{0,20}4/,
+            );
+          });
+          await delay(200);
+          const count = await lab.webContents.executeJavaScript(
+            `document.querySelectorAll('#chat .chat-message').length`,
+          );
+          check("Chat renders both questions and both answers", () =>
+            assert.equal(count, 4),
+          );
+          const expectedCode = await lab.webContents.executeJavaScript(
+            `document.querySelector('#chat .code-block pre').textContent`,
+          );
+          await lab.webContents.executeJavaScript(
+            `document.querySelector('#chat .code-block button').click()`,
+          );
+          await delay(150);
+          check("Copy code preserves the exact displayed code", () =>
+            assert.equal(clipboard.readText(), expectedCode),
+          );
+          await lab.webContents.executeJavaScript(
+            `document.querySelector('#chat .assistant').scrollIntoView({block:'start'})`,
+          );
+          await fs.writeFile(
+            path.join(artifactDir, "chat-answer.png"),
+            (await lab.webContents.capturePage()).toPNG(),
+          );
+        } finally {
+          fixture.destroy();
+        }
+      }
+    } finally {
+      clipboard.writeText(previousClipboard);
+    }
+    const normalBounds = lab.getBounds();
+    lab.setSize(960, 700);
+    await delay(200);
+    const fits = await lab.webContents.executeJavaScript(
+      `({page: document.documentElement.scrollWidth <= innerWidth, composer: document.querySelector('#question-form').getBoundingClientRect().right <= innerWidth, chat: document.querySelector('#chat').clientHeight > 100})`,
+    );
+    check("Minimum workspace size fits the chat and composer", () => {
+      assert.equal(fits.page, true);
+      assert.equal(fits.composer, true);
+      assert.equal(fits.chat, true);
+    });
+    await fs.writeFile(
+      path.join(artifactDir, "minimum-ui.png"),
+      (await lab.webContents.capturePage()).toPNG(),
+    );
+    lab.setBounds(normalBounds);
+  }
   const captureResults = [];
   if (process.argv.includes("--capture-test")) {
     captureResults.push(await runCapture());
@@ -577,10 +754,10 @@ app
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
         {
-          label: "Capture Lab",
+          label: "Screening",
           submenu: [
             {
-              label: "Show Lab",
+              label: "Show Screening",
               click: () => {
                 lab.show();
                 lab.focus();
@@ -607,15 +784,15 @@ app
     );
     const area = screen.getPrimaryDisplay().workArea;
     lab = create("index.html", {
-      title: "Capture Lab",
+      title: "Screening",
       width: Math.min(1180, area.width),
-      height: Math.min(800, area.height),
-      minWidth: 860,
-      minHeight: 620,
+      height: Math.min(840, area.height),
+      minWidth: 960,
+      minHeight: 700,
       titleBarStyle: "hiddenInset",
     });
     overlay = create("overlay.html", {
-      title: "Capture Lab — Assistant",
+      title: "Screening — Assistant",
       width: 500,
       height: 430,
       minWidth: 360,
@@ -649,6 +826,14 @@ app
       app,
       publish,
       () => lab,
+      {
+        windowCapture:
+          new (require("./services/window-capture.cjs").WindowCapture)(() => [
+            lab.getMediaSourceId(),
+            overlay.getMediaSourceId(),
+          ]),
+        getNotes: () => state.notes,
+      },
     );
     const shortcuts = [
       [
@@ -706,6 +891,22 @@ app
     });
     ipcMain.handle("interview:request", (event, op, payload) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
+      if (
+        ["windows", "window-capture", "remove-attachment"].includes(op) &&
+        event.senderFrame !== lab.webContents.mainFrame
+      )
+        throw new Error("Open the workspace to select a window.");
+      if (op === "clipboard-read") {
+        if (event.senderFrame !== lab.webContents.mainFrame)
+          throw new Error("Open the workspace to paste text.");
+        return clipboard.readText().slice(0, 16000);
+      }
+      if (op === "clipboard-write") {
+        if (typeof payload !== "string" || payload.length > 64000)
+          throw new Error("Invalid clipboard text");
+        clipboard.writeText(payload);
+        return;
+      }
       return interview.request(op, payload);
     });
     ipcMain.handle("interview:audio", (event, buffer) => {

@@ -16,7 +16,12 @@ const LANGUAGE_CODES = [
   "uk",
   "tr",
 ];
-async function createInterview(app, publish, parent) {
+async function createInterview(
+  app,
+  publish,
+  parent,
+  { windowCapture, getNotes = () => "" } = {},
+) {
   const settings = {
     locale: "ru",
     speechLanguage: "auto",
@@ -24,6 +29,9 @@ async function createInterview(app, publish, parent) {
     autoAnswer: false,
     style: "concise",
     context: "",
+    interviewType: "general",
+    notesEnabled: true,
+    includeNotes: false,
   };
   const location = path.join(app.getPath("userData"), "settings.json");
   try {
@@ -34,6 +42,9 @@ async function createInterview(app, publish, parent) {
       "answerLanguage",
       "autoAnswer",
       "style",
+      "interviewType",
+      "notesEnabled",
+      "includeNotes",
     ])
       if (validSetting(k, saved[k])) settings[k] = saved[k];
     if (saved.contextEncrypted && safeStorage.isEncryptionAvailable())
@@ -49,6 +60,8 @@ async function createInterview(app, publish, parent) {
   const state = {
     settings,
     transcript: [],
+    messages: [],
+    attachment: null,
     recording: false,
     source: null,
     error: null,
@@ -57,7 +70,22 @@ async function createInterview(app, publish, parent) {
   const update = () => {
     if (!closed) publish();
   };
-  const ai = new Assistant(update);
+  let activeTurn = null;
+  let messageId = 0;
+  const ai = new Assistant((value) => {
+    if (activeTurn) {
+      activeTurn.text = value.answer;
+      activeTurn.status = value.busy
+        ? "pending"
+        : ai.canceled
+          ? "stopped"
+          : value.error
+            ? "error"
+            : "done";
+      activeTurn.error = value.error;
+    }
+    update();
+  });
   state.ai = ai.state;
   const whisper = new Transcription(
     process.env.CAPTURE_LAB_MODEL_CACHE ||
@@ -77,7 +105,7 @@ async function createInterview(app, publish, parent) {
       clearTimeout(autoTimer);
       if (settings.autoAnswer)
         autoTimer = setTimeout(() => {
-          if (!ai.state.busy && ai.state.connected)
+          if (!ai.state.busy && ai.state.connected && !state.attachment)
             answer("").catch((e) => {
               state.error = e.message;
               update();
@@ -130,7 +158,17 @@ async function createInterview(app, publish, parent) {
     if (["speechLanguage", "answerLanguage"].includes(key))
       return LANGUAGE_CODES.includes(value);
     if (key === "locale") return ["ru", "en", "kk"].includes(value);
-    if (key === "autoAnswer") return typeof value === "boolean";
+    if (["autoAnswer", "notesEnabled", "includeNotes"].includes(key))
+      return typeof value === "boolean";
+    if (key === "interviewType")
+      return [
+        "general",
+        "coding",
+        "system",
+        "behavioral",
+        "case",
+        "hr",
+      ].includes(value);
     if (key === "style") return ["concise", "detailed"].includes(value);
     if (key === "context")
       return typeof value === "string" && value.length <= 16000;
@@ -141,18 +179,73 @@ async function createInterview(app, publish, parent) {
     clearTimeout(autoTimer);
     if (typeof question !== "string" || question.length > 16000)
       throw new Error("Invalid question");
+    if (ai.state.busy) throw new Error("Stop the current answer first.");
+    if (!ai.state.connected) throw new Error("Sign in with ChatGPT first.");
+    const attachment = state.attachment;
     const input =
       question.trim() ||
-      state.transcript
-        .slice(-4)
-        .map((t) => t.text)
-        .join("\n");
-    return ai.answer({
-      question: input,
-      context: settings.context,
-      language: settings.answerLanguage,
-      style: settings.style,
+      (attachment
+        ? "Help me answer the task in this screenshot."
+        : state.transcript
+            .slice(-4)
+            .map((t) => t.text)
+            .join("\n"));
+    if (!input)
+      throw new Error(
+        "Type a question, record speech, or attach a window screenshot first.",
+      );
+    const history = state.messages
+      .filter((m) => m.status !== "error" && m.text)
+      .map(({ role, text }) => ({ role, text }));
+    const time = new Date().toISOString();
+    state.messages.push({
+      id: ++messageId,
+      role: "user",
+      text: input,
+      time,
+      attachment: attachment
+        ? { name: attachment.name, dataUrl: attachment.dataUrl }
+        : null,
     });
+    activeTurn = {
+      id: ++messageId,
+      role: "assistant",
+      text: "",
+      time,
+      status: "pending",
+      error: null,
+    };
+    state.messages.push(activeTurn);
+    if (state.messages.length > 60)
+      state.messages.splice(0, state.messages.length - 60);
+    // Bound image memory while keeping the text history useful for follow-ups.
+    const images = state.messages.filter((m) => m.attachment?.dataUrl);
+    for (const old of images.slice(0, -6)) delete old.attachment.dataUrl;
+    state.attachment = null;
+    update();
+    try {
+      return await ai.answer({
+        question: input,
+        context: settings.context,
+        language: settings.answerLanguage,
+        style: settings.style,
+        history,
+        interviewType: settings.interviewType,
+        notes: settings.notesEnabled && settings.includeNotes ? getNotes() : "",
+        image: attachment
+          ? Buffer.from(attachment.dataUrl.split(",")[1], "base64")
+          : null,
+      });
+    } catch (error) {
+      activeTurn.status = "error";
+      activeTurn.error = error.message;
+      throw error;
+    } finally {
+      if (activeTurn.status === "pending")
+        activeTurn.status = ai.canceled ? "stopped" : "done";
+      activeTurn = null;
+      update();
+    }
   }
   async function request(op, payload) {
     if (op === "setting") {
@@ -163,16 +256,35 @@ async function createInterview(app, publish, parent) {
       update();
       return;
     }
+    if (op === "windows") return windowCapture.list();
+    if (op === "window-capture") {
+      if (ai.state.busy)
+        throw new Error("Stop the answer before attaching a screenshot.");
+      const attachment = await windowCapture.capture(payload);
+      state.attachment = attachment;
+      update();
+      return;
+    }
+    if (op === "remove-attachment") {
+      state.attachment = null;
+      update();
+      return;
+    }
     if (op === "model") return whisper.load();
     if (op === "login") return ai.login();
     if (op === "account") return ai.status();
     if (op === "answer") return answer(payload || "");
-    if (op === "cancel") return ai.cancel();
+    if (op === "cancel") {
+      if (activeTurn) activeTurn.status = "stopped";
+      return ai.cancel();
+    }
     if (op === "clear") {
       if (ai.state.busy) throw new Error("Stop the answer first.");
       clearTimeout(autoTimer);
       whisper.clear();
       state.transcript = [];
+      state.messages = [];
+      state.attachment = null;
       state.error = null;
       ai.update({ answer: "", question: "", error: null });
       update();
@@ -220,9 +332,14 @@ async function createInterview(app, publish, parent) {
         await fs.writeFile(
           result.filePath,
           text +
-            (ai.state.answer
-              ? `\n\nQuestion:\n${ai.state.question}\n\nAnswer:\n${ai.state.answer}`
-              : ""),
+            "\n\n" +
+            state.messages
+              .map(
+                (m) =>
+                  `${m.role === "user" ? "You" : "Screening"}:\n${m.text}${m.attachment ? `\n[Window screenshot: ${m.attachment.name}]` : ""}`,
+              )
+              .join("\n\n") +
+            (settings.notesEnabled ? `\n\nNotes:\n${getNotes()}` : ""),
         );
       }
       return;

@@ -30,21 +30,21 @@ jobs:
           $installRoot = Join-Path $pwd 'build\installed'
           $setup = Start-Process -FilePath $installer -ArgumentList '/S','/currentuser',"/D=$installRoot" -Wait -PassThru
           if ($setup.ExitCode -ne 0) { throw "Installer failed: $($setup.ExitCode)" }
-          $installedExe = Join-Path $installRoot 'Capture Lab.exe'
+          $installedExe = Join-Path $installRoot 'Screening.exe'
           for ($attempt=0; $attempt -lt 60; $attempt++) {
             if (Test-Path $installedExe) { break }
             $programs = Join-Path $env:LOCALAPPDATA 'Programs'
-            $found = Get-ChildItem $programs -Filter 'Capture Lab.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            $found = Get-ChildItem $programs -Filter 'Screening.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($found) { $installedExe = $found.FullName; break }
             Start-Sleep -Seconds 2
           }
           if (!(Test-Path $installedExe)) {
             Get-ChildItem $installRoot -ErrorAction SilentlyContinue
-            Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -Like '*Capture Lab*' | Format-List DisplayName,InstallLocation
+            Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -Like '*Screening*' | Format-List DisplayName,InstallLocation
             throw 'Installed executable is missing'
           }
           Write-Host "Testing installed app: $installedExe"
-          $app = Start-Process -FilePath $installedExe -ArgumentList '--verify','--interview-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
+          $app = Start-Process -FilePath $installedExe -ArgumentList '--verify','--interview-test','--screening-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
           Get-Content "$pwd/build/windows-verify.log"
           Get-Content "$pwd/build/windows-verify-error.log"
           if ($app.ExitCode -ne 0) { throw "App verification failed: $($app.ExitCode)" }

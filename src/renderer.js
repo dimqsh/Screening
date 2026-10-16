@@ -6,6 +6,7 @@ let current,
   lastAnswer = null,
   lastQuestion = null,
   lastResult = null,
+  lastAttachment = null,
   errorTimer,
   contextDirty = false;
 const t = (key) => window.copy[locale]?.[key] || window.copy.en[key] || key;
@@ -70,6 +71,7 @@ function translate() {
   lastAnswer = null;
   lastTranscript = "";
   lastResult = null;
+  if ($("chat")) $("chat").replaceChildren();
 }
 function setText(id, text) {
   const el = $(id);
@@ -101,6 +103,9 @@ for (const key of [
   "answerLanguage",
   "style",
   "autoAnswer",
+  "interviewType",
+  "notesEnabled",
+  "includeNotes",
 ])
   $(key)?.addEventListener(
     "change",
@@ -153,6 +158,10 @@ $("check-account")?.addEventListener(
   safe(() => api.request("account")),
 );
 $("account-shortcut")?.addEventListener("click", () => showView("settings"));
+$("new-chat")?.addEventListener(
+  "click",
+  safe(() => api.request("clear")),
+);
 $("clear-session")?.addEventListener(
   "click",
   safe(() => api.request("clear")),
@@ -185,25 +194,135 @@ $("save-context")?.addEventListener(
     setText("context-saved", t("saved"));
   }),
 );
+async function copyText(text, button) {
+  if (!text) return;
+  await api.request("clipboard-write", text);
+  if (button) {
+    const old = button.textContent;
+    const hasIcon = Boolean(button.querySelector("svg"));
+    button.title = t("copied");
+    if (!hasIcon) button.textContent = t("copied");
+    setTimeout(() => {
+      if (button.isConnected && !hasIcon) button.textContent = old;
+    }, 1600);
+  }
+  setText("copy-status", t("copied"));
+}
 $("copy-answer")?.addEventListener(
   "click",
+  safe((e) => copyText(current.interview.ai.answer, e.currentTarget)),
+);
+$("paste-question")?.addEventListener(
+  "click",
   safe(async () => {
-    if (current.interview.ai.answer) {
-      await navigator.clipboard.writeText(current.interview.ai.answer);
-      $("copy-answer").title = t("copied");
-    }
+    const text = await api.request("clipboard-read");
+    const field = $("question");
+    const available =
+      16000 -
+      (field.value.length - (field.selectionEnd - field.selectionStart));
+    field.setRangeText(
+      text.slice(0, available),
+      field.selectionStart,
+      field.selectionEnd,
+      "end",
+    );
+    field.focus();
   }),
 );
 $("question-form")?.addEventListener(
   "submit",
   safe(async (e) => {
     e.preventDefault();
-    const question = $("question").value.trim();
-    if (!question && !current.interview.transcript.length)
+    const field = $("question");
+    const question = field.value.trim();
+    if (
+      !question &&
+      !current.interview.transcript.length &&
+      !current.interview.attachment
+    )
       throw new Error(t("noSpeech"));
-    await api.request("answer", question);
+    field.value = "";
+    try {
+      await api.request("answer", question);
+    } catch (e) {
+      if (!field.value && !current.interview.messages.length)
+        field.value = question;
+      throw e;
+    }
   }),
 );
+let pickerBusy = false;
+async function loadWindows() {
+  const list = $("window-list");
+  list.replaceChildren();
+  setText("picker-status", t("loadingWindows"));
+  $("refresh-windows").disabled = true;
+  try {
+    const sources = await api.request("windows");
+    for (const source of sources) {
+      const button = document.createElement("button");
+      button.className = "window-option";
+      const img = document.createElement("img");
+      img.src = source.thumbnail;
+      img.alt = "";
+      const title = document.createElement("span");
+      title.textContent = source.name;
+      button.append(img, title);
+      button.title = source.name;
+      button.addEventListener(
+        "click",
+        safe(async () => {
+          if (pickerBusy) return;
+          pickerBusy = true;
+          setText("picker-status", t("takingSnapshot"));
+          try {
+            await api.request("window-capture", source.id);
+            $("window-picker").close();
+            $("question").focus();
+          } finally {
+            pickerBusy = false;
+            setText("picker-status", "");
+          }
+        }),
+      );
+      list.append(button);
+    }
+    setText(
+      "picker-status",
+      sources.length ? t("snapshotLocal") : t("noWindows"),
+    );
+  } catch (e) {
+    setText("picker-status", e.message);
+  } finally {
+    $("refresh-windows").disabled = false;
+  }
+}
+$("choose-window")?.addEventListener(
+  "click",
+  safe(async () => {
+    $("window-picker").showModal();
+    await loadWindows();
+  }),
+);
+$("refresh-windows")?.addEventListener("click", safe(loadWindows));
+$("close-picker")?.addEventListener("click", () => $("window-picker").close());
+$("remove-attachment")?.addEventListener(
+  "click",
+  safe(() => api.request("remove-attachment")),
+);
+$("preview-attachment")?.addEventListener("click", () => {
+  $("full-image").src = current.interview.attachment.dataUrl;
+  $("image-preview").showModal();
+});
+$("close-image")?.addEventListener("click", () => $("image-preview").close());
+for (const button of document.querySelectorAll("[data-session-tab]"))
+  button.addEventListener("click", () => {
+    document
+      .querySelectorAll("[data-session-tab]")
+      .forEach((el) => el.classList.toggle("active", el === button));
+    $("session-transcript").hidden = button.dataset.sessionTab !== "transcript";
+    $("session-notes").hidden = button.dataset.sessionTab !== "notes";
+  });
 $("question")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
@@ -237,37 +356,151 @@ for (const tab of document.querySelectorAll("[data-overlay-tab]"))
     $("overlay-answer-pane").hidden = tab.dataset.overlayTab !== "answer";
     $("overlay-notes-pane").hidden = tab.dataset.overlayTab !== "notes";
   });
+function renderText(target, text) {
+  target.replaceChildren();
+  for (const block of text.split(/(```[\s\S]*?(?:```|$))/g)) {
+    if (!block) continue;
+    if (block.startsWith("```")) {
+      const newline = block.indexOf("\n");
+      const language = newline > -1 ? block.slice(3, newline).trim() : "";
+      let code = newline > -1 ? block.slice(newline + 1) : block.slice(3);
+      if (code.endsWith("```")) code = code.slice(0, -3);
+      code = code.replace(/\n$/, "");
+      const wrap = document.createElement("div");
+      wrap.className = "code-block";
+      const header = document.createElement("div");
+      const label = document.createElement("span");
+      label.textContent = language.slice(0, 40) || t("code");
+      const copy = document.createElement("button");
+      copy.className = "text-button";
+      copy.textContent = t("copyCode");
+      copy.addEventListener(
+        "click",
+        safe(() => copyText(code, copy)),
+      );
+      header.append(label, copy);
+      const pre = document.createElement("pre");
+      const content = document.createElement("code");
+      content.textContent = code;
+      pre.append(content);
+      wrap.append(header, pre);
+      target.append(wrap);
+      continue;
+    }
+    for (const paragraph of block.split(/\n\s*\n/)) {
+      if (!paragraph.trim()) continue;
+      const p = document.createElement("p");
+      for (const token of paragraph.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)) {
+        if (token.startsWith("**") && token.endsWith("**")) {
+          const strong = document.createElement("strong");
+          strong.textContent = token.slice(2, -2);
+          p.append(strong);
+        } else if (token.startsWith("`") && token.endsWith("`")) {
+          const code = document.createElement("code");
+          code.textContent = token.slice(1, -1);
+          p.append(code);
+        } else p.append(document.createTextNode(token));
+      }
+      target.append(p);
+    }
+  }
+}
+function emptyState(title, hint) {
+  const empty = document.createElement("div");
+  empty.className = "empty-state";
+  const img = document.createElement("img");
+  img.className = "empty-logo";
+  img.src = "../assets/brand/screening.png";
+  img.alt = "";
+  const h = document.createElement("h3");
+  h.textContent = title;
+  const p = document.createElement("p");
+  p.textContent = hint;
+  empty.append(img, h, p);
+  return empty;
+}
 function renderAnswer(text) {
   const target = $("answer");
-  target.replaceChildren();
-  if (!text) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    const h = document.createElement("h3");
-    h.textContent = t("answerEmpty");
-    const p = document.createElement("p");
-    p.textContent = document.body.classList.contains("overlay")
-      ? t("overlayEmpty")
-      : t("answerHint");
-    empty.append(h, p);
-    target.append(empty);
+  if (!target) return;
+  if (text) renderText(target, text);
+  else target.replaceChildren(emptyState(t("answerEmpty"), t("overlayEmpty")));
+}
+function renderChat(messages) {
+  const target = $("chat");
+  if (!target) return;
+  const atBottom =
+    target.scrollHeight - target.scrollTop - target.clientHeight < 80;
+  if (!messages.length) {
+    if (!target.querySelector(".empty-state"))
+      target.replaceChildren(emptyState(t("chatEmpty"), t("chatHint")));
     return;
   }
-  for (const paragraph of text.split(/\n\s*\n/)) {
-    const p = document.createElement("p");
-    for (const token of paragraph.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)) {
-      if (token.startsWith("**") && token.endsWith("**")) {
-        const strong = document.createElement("strong");
-        strong.textContent = token.slice(2, -2);
-        p.append(strong);
-      } else if (token.startsWith("`") && token.endsWith("`")) {
-        const code = document.createElement("code");
-        code.textContent = token.slice(1, -1);
-        p.append(code);
-      } else p.append(document.createTextNode(token));
+  target.querySelector(".empty-state")?.remove();
+  const ids = new Set(messages.map((m) => String(m.id)));
+  for (const row of target.children) if (!ids.has(row.dataset.id)) row.remove();
+  for (const message of messages) {
+    let row = target.querySelector(`[data-id="${message.id}"]`);
+    const key = JSON.stringify([
+      message.text,
+      message.status,
+      message.error,
+      message.attachment,
+    ]);
+    if (row?.dataset.key === key) continue;
+    if (!row) {
+      row = document.createElement("article");
+      row.dataset.id = message.id;
+      target.append(row);
     }
-    target.append(p);
+    row.dataset.key = key;
+    row.className = `chat-message ${message.role}`;
+    row.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "message-heading";
+    const name = document.createElement("strong");
+    name.textContent = message.role === "user" ? t("you") : "Screening";
+    const copy = document.createElement("button");
+    copy.className = "text-button message-copy";
+    copy.textContent = t("copyMessage");
+    copy.disabled = !message.text;
+    copy.addEventListener(
+      "click",
+      safe(() => copyText(message.text, copy)),
+    );
+    head.append(name, copy);
+    row.append(head);
+    if (message.attachment) {
+      const figure = document.createElement("figure");
+      figure.className = "message-attachment";
+      if (message.attachment.dataUrl) {
+        const img = document.createElement("img");
+        img.src = message.attachment.dataUrl;
+        img.alt = message.attachment.name;
+        figure.append(img);
+      }
+      const label = document.createElement("figcaption");
+      label.textContent = message.attachment.name;
+      figure.append(label);
+      row.append(figure);
+    }
+    const text = document.createElement("div");
+    text.className = "answer-text";
+    renderText(text, message.text);
+    row.append(text);
+    if (message.status === "pending" && !message.text) {
+      const pending = document.createElement("p");
+      pending.className = "message-status";
+      pending.textContent = t("thinking");
+      row.append(pending);
+    }
+    if (message.error || message.status === "stopped") {
+      const issue = document.createElement("p");
+      issue.className = "message-status";
+      issue.textContent = message.error || t("answerStopped");
+      row.append(issue);
+    }
   }
+  if (atBottom) target.scrollTop = target.scrollHeight;
 }
 function render(s) {
   current = s;
@@ -281,10 +514,37 @@ function render(s) {
   }
   for (const key of ["protection", "hideDock", "clickThrough"])
     if ($(key)) $(key).checked = s[key];
-  for (const key of ["locale", "speechLanguage", "answerLanguage", "style"])
+  for (const key of [
+    "locale",
+    "speechLanguage",
+    "answerLanguage",
+    "style",
+    "interviewType",
+  ])
     if ($(key) && document.activeElement !== $(key))
       $(key).value = settings[key];
-  if ($("autoAnswer")) $("autoAnswer").checked = settings.autoAnswer;
+  for (const key of ["autoAnswer", "notesEnabled", "includeNotes"])
+    if ($(key)) $(key).checked = settings[key];
+  if ($("notes-editor")) $("notes-editor").hidden = !settings.notesEnabled;
+  if ($("notes-disabled")) $("notes-disabled").hidden = settings.notesEnabled;
+  if (document.body.classList.contains("overlay")) {
+    const notesTab = document.querySelector('[data-overlay-tab="notes"]');
+    notesTab.hidden = !settings.notesEnabled;
+    if (!settings.notesEnabled && !$("overlay-notes-pane").hidden)
+      document.querySelector('[data-overlay-tab="answer"]').click();
+  }
+  renderChat(interview.messages || []);
+  if ($("attachment")) {
+    $("attachment").hidden = !interview.attachment;
+    if (lastAttachment !== interview.attachment?.dataUrl) {
+      lastAttachment = interview.attachment?.dataUrl;
+      if (interview.attachment) {
+        $("attachment-image").src = interview.attachment.dataUrl;
+        setText("attachment-name", interview.attachment.name);
+      } else $("attachment-image").removeAttribute("src");
+    }
+    $("choose-window").disabled = aiBusy(interview);
+  }
   if (
     $("candidate-context") &&
     !contextDirty &&
@@ -413,7 +673,7 @@ function render(s) {
     lastAnswer = ai.answer;
     renderAnswer(ai.answer);
   }
-  if (lastQuestion !== ai.question) {
+  if ($("answered-question") && lastQuestion !== ai.question) {
     lastQuestion = ai.question;
     setText("answered-question", ai.question);
     $("answered-question").hidden = !ai.question;
@@ -422,6 +682,7 @@ function render(s) {
   if ($("cancel-answer")) $("cancel-answer").hidden = !ai.busy;
   if ($("ask")) $("ask").disabled = ai.busy || !ai.connected;
   if ($("clear-session")) $("clear-session").disabled = ai.busy;
+  if ($("new-chat")) $("new-chat").disabled = ai.busy;
   if ($("copy-answer")) $("copy-answer").disabled = !ai.answer;
   const issue = interview.error || ai.error || w.error;
   if (issue && issue !== document.body.dataset.error) {
@@ -485,6 +746,9 @@ setInterval(() => {
     );
   }
 }, 1000);
+function aiBusy(interview) {
+  return interview.ai.busy;
+}
 api.subscribe(render);
 api
   .state()

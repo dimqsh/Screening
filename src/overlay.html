@@ -5,16 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'"
+      content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'none'"
     />
-    <title>Capture Lab — Assistant</title>
+    <title>Screening — Assistant</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body class="overlay">
     <header class="overlay-header">
       <span class="overlay-brand"
-        ><span class="status-dot"></span> Capture Lab
-        <small id="overlay-status"></small></span
+        ><img class="brand-logo" src="../assets/brand/screening.png" alt="" />
+        Screening <small id="overlay-status"></small></span
       ><button id="hide" class="icon-button" aria-label="Hide overlay">
         ×
       </button>
@@ -26,6 +26,12 @@
         ><button class="tab" data-overlay-tab="notes" data-i18n="notes">
           Заметки</button
         ><span id="overlay-recording"></span>
+        <label class="notes-switch"
+          ><input type="checkbox" id="notesEnabled" role="switch" /><span
+            data-i18n="notes"
+            >Заметки</span
+          ></label
+        >
       </div>
       <section id="overlay-answer-pane">
         <p id="answered-question" class="answered-question" hidden></p>
@@ -45,7 +51,9 @@
         ></textarea>
       </section>
       <footer class="overlay-footer">
-        <span id="ai-status"></span
+        <button id="copy-answer" class="text-button" data-i18n="copy">
+          Копировать</button
+        ><span id="ai-status"></span
         ><button id="overlay-ask" class="text-button" data-i18n="ask">
           Ответить</button
         ><button id="overlay-stop" class="text-button" data-i18n="stop" hidden>
@@ -62,7 +70,7 @@
     <div id="test-view" hidden>
       <div class="probe"></div>
       <p>SYNTHETIC TEST CARD</p>
-      <h1>Capture Lab</h1>
+      <h1>Screening</h1>
       <p>Magenta marker = overlay captured</p>
     </div>
     <p id="error" role="alert" class="error-toast" hidden></p>

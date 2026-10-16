@@ -19,6 +19,7 @@ const execFile = promisify(require("node:child_process").execFile);
 
 app.setName("Capture Lab");
 const verification = process.argv.includes("--verify");
+if (!verification && !app.requestSingleInstanceLock()) app.exit(0);
 const artifactDir = path.resolve(
   process.env.CAPTURE_LAB_ARTIFACTS || path.join(__dirname, "..", "validation"),
 );
@@ -741,6 +742,13 @@ app.on("before-quit", () => {
 app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => app.quit());
 app.on("activate", () => {
+  if (lab && !lab.isDestroyed()) {
+    lab.show();
+    lab.focus();
+  }
+});
+
+app.on("second-instance", () => {
   if (lab && !lab.isDestroyed()) {
     lab.show();
     lab.focus();

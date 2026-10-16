@@ -64,6 +64,8 @@ window.copy = {
     hideDock: "Скрывать значок Dock",
     clickThrough: "Пропускать клики через окно",
     recoverHint: "возвращает управление",
+    shortcutWarning:
+      "Некоторые горячие клавиши заняты. Закройте старую копию Capture Lab или программу с такими же сочетаниями.",
     hideOverlay: "Скрыть окно",
     showOverlay: "Показать окно",
     recover: "Вернуть окно",
@@ -171,6 +173,8 @@ window.copy = {
     hideDock: "Hide Dock icon",
     clickThrough: "Pass clicks through the window",
     recoverHint: "restores control",
+    shortcutWarning:
+      "Some shortcuts are in use. Close the old Capture Lab instance or the app using the same keys.",
     hideOverlay: "Hide window",
     showOverlay: "Show window",
     recover: "Recover window",
@@ -277,6 +281,8 @@ window.copy = {
     hideDock: "Dock белгішесін жасыру",
     clickThrough: "Басуларды терезеден өткізу",
     recoverHint: "басқаруды қайтарады",
+    shortcutWarning:
+      "Кейбір пернелер тіркесімі бос емес. Capture Lab ескі көшірмесін немесе сол пернелерді қолданатын бағдарламаны жабыңыз.",
     hideOverlay: "Терезені жасыру",
     showOverlay: "Терезені көрсету",
     recover: "Терезені қайтару",

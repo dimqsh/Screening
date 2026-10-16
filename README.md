@@ -57,7 +57,7 @@ npm run package:win # x64 NSIS EXE, on Windows
 
 `npm run verify` exercises native protection flags, recovery, IPC validation, editable notes, renderer isolation and interface language switching. To exercise real speech recognition, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:interview`. `--live-ai-test` additionally makes one real account-backed request; it requires ChatGPT sign-in.
 
-The Windows release workflow builds a native Windows installer, launches the packaged application and checks actual Whisper transcription of the public JFK sample. It does not establish a Windows meeting-recipient capture result or test the interactive OAuth flow on a Windows user’s account.
+The Windows release workflow builds a native Windows installer, installs the EXE and launches the installed application and checks actual Whisper transcription of the public JFK sample. It does not establish a Windows meeting-recipient capture result or test the interactive OAuth flow on a Windows user’s account.
 
 Installers are currently unsigned by a publisher certificate; the Mac bundle is ad-hoc signed. macOS Gatekeeper and Windows SmartScreen may require an explicit open/install decision. No auto-update service is enabled.
 

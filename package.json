@@ -15,7 +15,7 @@
     "verify:interview": "electron . --verify --interview-test"
   },
   "devDependencies": {
-    "electron": "40.8.0",
+    "electron": "40.10.6",
     "electron-builder": "26.15.3"
   },
   "dependencies": {

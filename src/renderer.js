@@ -299,6 +299,18 @@ function render(s) {
     $("notes-view").hidden = s.testCard;
     $("test-view").hidden = !s.testCard;
   }
+  const missingShortcuts = s.shortcuts.some((shortcut) => !shortcut.registered);
+  if ($("view-settings")) {
+    let warning = $("shortcut-warning");
+    if (!warning) {
+      warning = document.createElement("p");
+      warning.id = "shortcut-warning";
+      warning.className = "help";
+      $("view-settings").append(warning);
+    }
+    warning.hidden = !missingShortcuts;
+    warning.textContent = t("shortcutWarning");
+  }
   const ai = interview.ai,
     w = interview.whisper;
   const accountText = t(

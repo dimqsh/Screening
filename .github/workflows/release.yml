@@ -1,0 +1,52 @@
+name: Build installers
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Prepare speech fixture
+        run: node scripts/prepare-speech-test.cjs
+      - run: npm run package:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify packaged Windows app and local Whisper
+        shell: pwsh
+        run: |
+          $env:CAPTURE_LAB_ARTIFACTS = "$pwd/validation/windows"
+          $env:CAPTURE_LAB_MODEL_CACHE = "$pwd/build/model-cache"
+          $env:CAPTURE_LAB_TEST_AUDIO = "$pwd/build/jfk.f32"
+          $app = Start-Process -FilePath "$pwd/dist/win-unpacked/Capture Lab.exe" -ArgumentList '--verify','--interview-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
+          Get-Content "$pwd/build/windows-verify.log"
+          Get-Content "$pwd/build/windows-verify-error.log"
+          if ($app.ExitCode -ne 0) { throw "App verification failed: $($app.ExitCode)" }
+          if (!(Test-Path "$pwd/validation/windows/verification.json")) { throw 'Verification did not produce its report' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-validation
+          path: |
+            validation/windows/
+            build/windows-verify*.log
+      - name: Upload installer to draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.exe --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-installer
+          path: dist/*.exe

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+validation/
+bin/
+.DS_Store
+*.log
+.env*
+*.pem
+*.p12
+*.key
+settings.json
+INVESTIGATION.md
+rea-evidence/
+code-facts/

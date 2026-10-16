@@ -1,0 +1,105 @@
+{
+  "name": "capture-lab",
+  "version": "0.2.0",
+  "description": "Multilingual local Whisper transcription and ChatGPT interview notes",
+  "main": "src/main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:native": "node scripts/build-native.cjs",
+    "verify": "electron . --verify",
+    "verify:capture": "electron . --verify --capture-test",
+    "package:mac": "npm run build:native && node scripts/prepare-runtime.cjs && electron-builder --mac dmg --arm64",
+    "test": "node --test test/unit.test.cjs",
+    "package:win": "node scripts/prepare-runtime.cjs && electron-builder --win nsis --x64",
+    "verify:interview": "electron . --verify --interview-test"
+  },
+  "devDependencies": {
+    "electron": "40.8.0",
+    "electron-builder": "26.15.3"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "@openai/codex": "0.163.0"
+  },
+  "author": "Dimash Arystambek",
+  "license": "MIT",
+  "build": {
+    "appId": "local.capturelab.prototype",
+    "productName": "Capture Lab",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!node_modules/@openai/**/*",
+      "LICENSE"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "**/*.dylib",
+      "**/*.dll",
+      "**/onnxruntime-node/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/codex",
+        "to": "codex",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false,
+      "entitlements": "scripts/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Capture Lab transcribes microphone speech locally when you start recording.",
+        "NSAudioCaptureUsageDescription": "Capture Lab transcribes the meeting audio you choose.",
+        "NSScreenCaptureUsageDescription": "Capture Lab uses screen access for system audio and capture-exclusion checks."
+      },
+      "extraResources": [
+        {
+          "from": "bin",
+          "to": "bin",
+          "filter": [
+            "capture-sck",
+            "audio-sck"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png"
+    },
+    "dmg": {
+      "sign": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "artifactName": "Capture-Lab-${version}-${os}-${arch}.${ext}",
+    "afterPack": "scripts/after-pack.cjs"
+  }
+}

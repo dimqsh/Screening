@@ -15,7 +15,7 @@ Desktop interview workspace for macOS and Windows: local multilingual Whisper tr
 
 Interface languages: Russian, English and Kazakh. Speech and answer selectors include automatic language selection and Russian, English, Kazakh, Spanish, French, German, Chinese, Japanese, Ukrainian and Turkish. Automatic speech language detection uses Whisper’s language-token logits. Language availability does not imply equal recognition accuracy; small models can mishear words, especially in noise and weaker-supported languages.
 
-Audio is processed in roughly eight-second chunks. The local queue is bounded; if the device cannot keep up, the app reports an error instead of growing an unlimited buffer. It does not identify speakers. System audio can include sounds from other applications.
+Audio is processed in roughly eight-second chunks. The local queue is bounded; if the device cannot keep up, the app reports an error instead of growing an unlimited buffer. A bundled Silero detector filters chunks without detected speech before Whisper runs. It does not identify speakers. System audio can include sounds from other applications.
 
 ## Account and data
 
@@ -33,11 +33,11 @@ Historical verification: version 0.1.0 was tested with Google Meet entire built-
 
 Hotkeys:
 
-| Action | Shortcut |
-|---|---|
+| Action                   | Shortcut             |
+| ------------------------ | -------------------- |
 | Show/hide compact window | Cmd/Ctrl+Shift+Space |
-| Recover mouse control | Cmd/Ctrl+Shift+R |
-| Show workspace | Cmd/Ctrl+Shift+L |
+| Recover mouse control    | Cmd/Ctrl+Shift+R     |
+| Show workspace           | Cmd/Ctrl+Shift+L     |
 | Answer recent transcript | Cmd/Ctrl+Shift+Enter |
 
 ## Development
@@ -64,8 +64,8 @@ Installers are currently unsigned by a publisher certificate; the Mac bundle is 
 ## Sources and licenses
 
 - [OpenAI Codex authentication](https://learn.chatgpt.com/docs/auth) and [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk).
-- [Transformers.js audio processing](https://huggingface.co/docs/transformers.js/guides/node-audio-processing), [Whisper base model](https://huggingface.co/onnx-community/whisper-base), [OpenAI Whisper](https://github.com/openai/whisper).
+- [Transformers.js audio processing](https://huggingface.co/docs/transformers.js/guides/node-audio-processing), [Whisper base model](https://huggingface.co/onnx-community/whisper-base), [OpenAI Whisper](https://github.com/openai/whisper), [Silero VAD](https://github.com/snakers4/silero-vad).
 - [Electron content protection](https://www.electronjs.org/docs/latest/api/browser-window#winsetcontentprotectionenable) and [audio loopback](https://www.electronjs.org/docs/latest/api/session#sessetdisplaymediarequesthandlerhandler-opts).
 - UI copy reviewed with [Peter Yang’s no-ai-slop skill](https://github.com/petergyang/no-ai-slop); workspace layout follows the locally installed ui-ux-pro-max guidance.
 
-Original application code: MIT. Electron: MIT. OpenAI Codex: Apache-2.0. Transformers.js: Apache-2.0. ONNX Runtime: MIT. Whisper weights: Apache-2.0 per the model repository. Dependency license files are retained in the packaged dependencies. No Cluely source, assets or proprietary binaries are included.
+Original application code: MIT. Electron: MIT. OpenAI Codex: Apache-2.0. Transformers.js: Apache-2.0. Silero VAD: MIT. ONNX Runtime: MIT. Whisper weights: Apache-2.0 per the model repository. Dependency license files are retained in the packaged dependencies. No Cluely source, assets or proprietary binaries are included.

@@ -38,6 +38,7 @@ final class AudioSink: NSObject, SCStreamOutput, SCStreamDelegate {
             let stream = SCStream(filter: filter, configuration: config, delegate: sink)
             try stream.addStreamOutput(sink, type: .audio, sampleHandlerQueue: DispatchQueue(label: "capturelab.audio"))
             try await stream.startCapture()
+            FileHandle.standardError.write(Data("SCREENING_AUDIO_READY\n".utf8))
             // Parent terminates this process when the user presses Stop or quits.
             try await Task.sleep(nanoseconds: UInt64.max)
         } catch {

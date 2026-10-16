@@ -1,6 +1,6 @@
 {
   "name": "screening",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Interview chat with local multilingual Whisper, ChatGPT and window snapshots",
   "main": "src/main.cjs",
   "private": true,

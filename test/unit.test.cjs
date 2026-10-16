@@ -57,3 +57,29 @@ test("follow-up prompts retain bounded conversation data and coding format", () 
   assert.ok(prompt.length < 28000);
   assert.ok(prompt.includes(JSON.stringify("My concrete example")));
 });
+
+test("shared audio commands propagate completion and permission failure", async () => {
+  const { AudioRouting } = require("../src/services/audio-routing.cjs");
+  const sent = [];
+  const routing = new AudioRouting((command) => sent.push(command), 1000);
+  const first = routing.command("start", "microphone");
+  assert.equal(sent[0].kind, "microphone");
+  routing.complete(sent[0].id, null);
+  await first;
+  const second = routing.command("start", "system");
+  const rejected = assert.rejects(second, /permission denied/);
+  routing.complete(sent[1].id, "permission denied");
+  await rejected;
+  routing.close();
+});
+test("a missing audio owner acknowledgement times out and permits a later request", async () => {
+  const { AudioRouting } = require("../src/services/audio-routing.cjs");
+  const sent = [];
+  const routing = new AudioRouting((command) => sent.push(command), 15);
+  await assert.rejects(routing.command("start", "microphone"), /timed out/);
+  routing.complete(sent[0].id, null);
+  const next = routing.command("stop");
+  routing.complete(sent[1].id, null);
+  await next;
+  routing.close();
+});

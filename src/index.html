@@ -44,7 +44,14 @@
       <span class="brand"
         ><img class="brand-logo" src="../assets/brand/screening.png" alt="" />
         Screening</span
-      ><span class="version">0.3.0</span>
+      >
+      <div class="titlebar-actions">
+        <span id="workspace-protection"></span>
+        <span class="version">0.4.0</span
+        ><button class="text-button" data-action="hide-all" data-i18n="hideAll">
+          Скрыть оба окна
+        </button>
+      </div>
     </header>
     <div class="app-shell">
       <aside class="sidebar">
@@ -139,6 +146,13 @@
                 id="speechLanguage"
                 class="language-select"
               ></select></label
+            ><meter
+              id="audio-level"
+              min="0"
+              max="1"
+              value="0"
+              aria-label="Audio level"
+            ></meter
             ><span id="elapsed" class="elapsed">00:00</span
             ><button id="record" class="primary">
               <span class="record-icon"></span
@@ -245,52 +259,7 @@
               </section>
             </aside>
           </div>
-          <form id="question-form" class="question-composer">
-            <div id="attachment" class="attachment" hidden>
-              <button
-                id="preview-attachment"
-                class="attachment-preview"
-                type="button"
-                data-title-i18n="previewImage"
-              >
-                <img id="attachment-image" alt="Selected window" /><span
-                  id="attachment-name"
-                ></span></button
-              ><button
-                id="remove-attachment"
-                class="icon-button"
-                type="button"
-                data-title-i18n="removeAttachment"
-                aria-label="Remove screenshot"
-              >
-                ×
-              </button>
-            </div>
-            <textarea
-              id="question"
-              rows="2"
-              maxlength="16000"
-              data-placeholder-i18n="questionPlaceholder"
-              aria-label="Interview question"
-            ></textarea>
-            <div class="composer-actions">
-              <button id="choose-window" type="button" class="composer-tool">
-                <svg><use href="#i-window" /></svg
-                ><span data-i18n="windowSnapshot">Снимок окна</span></button
-              ><button
-                id="paste-question"
-                type="button"
-                class="composer-tool"
-                data-i18n="paste"
-              >
-                Вставить текст</button
-              ><span class="composer-shortcut">⌘ / Ctrl Enter</span
-              ><button id="ask" class="primary" type="submit">
-                <span data-i18n="send">Отправить</span
-                ><svg><use href="#i-arrow" /></svg>
-              </button>
-            </div>
-          </form>
+          <div class="composer-mount" data-composer></div>
           <p class="footnote" data-i18n="privacyHint">
             Речь обрабатывается локально. В ChatGPT отправляются сообщения,
             контекст и прикреплённый снимок.
@@ -461,6 +430,19 @@
             <option value="electron">Electron screen capture</option>
             <option value="sck">Apple ScreenCaptureKit</option>
           </select>
+          <label
+            class="field-label"
+            for="captureWindow"
+            data-i18n="captureWindow"
+            >Окно для проверки</label
+          ><select id="captureWindow">
+            <option value="overlay" data-i18n="compactWindow">
+              Маленькое окно
+            </option>
+            <option value="workspace" data-i18n="workspaceWindow">
+              Большое окно
+            </option>
+          </select>
           <div class="comparison">
             <figure>
               <div class="preview" id="baseline"><span>01</span></div>
@@ -496,49 +478,16 @@
             невидимость во всех программах и записях.
           </p>
         </section>
-        <span id="copy-status" class="sr-only" role="status"></span>
-        <dialog
-          id="window-picker"
-          class="window-dialog"
-          aria-labelledby="picker-title"
-        >
-          <header>
-            <div>
-              <h2 id="picker-title" data-i18n="chooseWindow">Выберите окно</h2>
-              <p class="help" data-i18n="snapshotHint">
-                Будет сделан один снимок. Он отправится вместе со следующим
-                сообщением.
-              </p>
-            </div>
-            <button
-              id="close-picker"
-              class="icon-button"
-              data-title-i18n="close"
-              aria-label="Close"
-            >
-              ×
-            </button>
-          </header>
-          <div id="window-list" class="window-list"></div>
-          <footer>
-            <span id="picker-status" role="status"></span
-            ><button id="refresh-windows" class="secondary" data-i18n="refresh">
-              Обновить
-            </button>
-          </footer>
-        </dialog>
-        <dialog
-          id="image-preview"
-          class="image-dialog"
-          aria-label="Screenshot preview"
-        >
-          <button id="close-image" class="secondary" data-i18n="close">
-            Закрыть</button
-          ><img id="full-image" alt="Window snapshot preview" />
-        </dialog>
         <div id="error" class="error-toast" role="alert" hidden></div>
       </main>
     </div>
+    <div id="workspace-test-view" class="capture-test-card" hidden>
+      <div class="probe"></div>
+      <p>SYNTHETIC WORKSPACE TEST</p>
+      <h1>Screening</h1>
+      <p>Magenta marker = window captured</p>
+    </div>
+    <script src="controls.js"></script>
     <script src="i18n.js"></script>
     <script src="audio.js"></script>
     <script src="renderer.js"></script>

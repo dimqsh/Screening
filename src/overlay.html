@@ -7,73 +7,248 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'none'"
     />
-    <title>Screening — Assistant</title>
+    <title>Screening — Compact</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body class="overlay">
+    <svg class="icons" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="i-wave" viewBox="0 0 24 24">
+        <path d="M4 10v4m4-8v12m4-16v20m4-16v12m4-8v4" />
+      </symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24">
+        <path d="M4 7h6m4 0h6M4 17h10m4 0h2" />
+        <circle cx="12" cy="7" r="2" />
+        <circle cx="16" cy="17" r="2" />
+      </symbol>
+      <symbol id="i-person" viewBox="0 0 24 24">
+        <circle cx="12" cy="7" r="4" />
+        <path d="M4 22v-3a8 8 0 0 1 16 0v3" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 2 3 6v6c0 5 9 10 9 10s9-5 9-10V6l-9-4Z" />
+        <path d="m8 12 3 3 5-6" />
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M12 20V4m-6 6 6-6 6 6" />
+      </symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24">
+        <rect x="8" y="8" width="12" height="13" rx="2" />
+        <path d="M15 8V3H3v13h5" />
+      </symbol>
+      <symbol id="i-window" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M3 9h18m-5 0v11" />
+      </symbol>
+    </svg>
+
     <header class="overlay-header">
       <span class="overlay-brand"
-        ><img class="brand-logo" src="../assets/brand/screening.png" alt="" />
-        Screening <small id="overlay-status"></small></span
-      ><button id="hide" class="icon-button" aria-label="Hide overlay">
-        ×
-      </button>
-    </header>
-    <div id="notes-view" class="overlay-content">
-      <div class="overlay-tabs">
-        <button class="tab active" data-overlay-tab="answer" data-i18n="answer">
-          Подсказка</button
-        ><button class="tab" data-overlay-tab="notes" data-i18n="notes">
-          Заметки</button
-        ><span id="overlay-recording"></span>
-        <label class="notes-switch"
-          ><input type="checkbox" id="notesEnabled" role="switch" /><span
-            data-i18n="notes"
-            >Заметки</span
-          ></label
+        ><img
+          class="brand-logo"
+          src="../assets/brand/screening.png"
+          alt="" />Screening <small id="overlay-status"></small
+      ></span>
+      <div class="overlay-window-actions">
+        <button
+          id="open-compact-settings"
+          class="icon-button"
+          data-title-i18n="settings"
+          aria-label="Settings"
         >
-      </div>
-      <section id="overlay-answer-pane">
-        <p id="answered-question" class="answered-question" hidden></p>
-        <div id="answer" class="answer-text">
-          <p class="help" data-i18n="overlayEmpty">
-            Здесь появится ответ. Нажмите ⌘ / Ctrl ⇧ Enter после вопроса.
-          </p>
-        </div>
-      </section>
-      <section id="overlay-notes-pane" hidden>
-        <label for="notes" class="sr-only" data-i18n="notes">Заметки</label
-        ><textarea
-          id="notes"
-          maxlength="12000"
-          spellcheck="false"
-          aria-label="Meeting notes"
-        ></textarea>
-      </section>
-      <footer class="overlay-footer">
-        <button id="copy-answer" class="text-button" data-i18n="copy">
-          Копировать</button
-        ><span id="ai-status"></span
-        ><button id="overlay-ask" class="text-button" data-i18n="ask">
-          Ответить</button
-        ><button id="overlay-stop" class="text-button" data-i18n="stop" hidden>
-          Остановить</button
+          <svg><use href="#i-sliders" /></svg></button
         ><button
           data-action="lab"
-          class="text-button"
-          data-i18n="openWorkspace"
+          class="icon-button"
+          data-title-i18n="openWorkspace"
+          aria-label="Expand"
         >
-          Открыть приложение ↗
+          ↗</button
+        ><button
+          id="hide"
+          class="icon-button"
+          data-title-i18n="hideAll"
+          aria-label="Hide"
+        >
+          ×
         </button>
-      </footer>
+      </div>
+    </header>
+    <div id="notes-view" class="overlay-content">
+      <div class="compact-record-bar">
+        <label class="sr-only" for="audio-source" data-i18n="source">Звук</label
+        ><select id="audio-source">
+          <option value="system" data-i18n="systemAudio">Системный звук</option>
+          <option value="microphone" data-i18n="microphone">
+            Микрофон
+          </option></select
+        ><span id="elapsed" class="elapsed">00:00</span
+        ><button id="record" class="primary">
+          <span class="record-icon"></span
+          ><span id="record-label" data-i18n="start">Начать запись</span>
+        </button>
+      </div>
+      <div class="compact-status">
+        <span id="record-dot" class="status-dot"></span
+        ><span id="session-label"></span
+        ><meter
+          id="audio-level"
+          min="0"
+          max="1"
+          value="0"
+          aria-label="Audio level"
+        ></meter
+        ><span id="processing"></span>
+      </div>
+      <div id="compact-setup" class="compact-setup">
+        <div>
+          <span id="model-label"></span><span id="account-label"></span>
+        </div>
+        <div>
+          <button id="load-model" class="secondary" data-i18n="loadModel">
+            Подготовить Whisper</button
+          ><button id="login" class="secondary" data-i18n="login">
+            Войти через ChatGPT
+          </button>
+        </div>
+        <progress id="model-progress" max="100" hidden></progress>
+        <p id="login-hint" class="help" hidden data-i18n="loginHint"></p>
+      </div>
+      <div class="overlay-tabs">
+        <button class="tab active" data-overlay-tab="answer" data-i18n="chat">
+          Беседа</button
+        ><button
+          class="tab"
+          data-overlay-tab="transcript"
+          data-i18n="transcript"
+        >
+          Расшифровка</button
+        ><button class="tab" data-overlay-tab="notes" data-i18n="notes">
+          Заметки</button
+        ><button id="new-chat" class="text-button" data-i18n="newChat">
+          Новая беседа
+        </button>
+      </div>
+      <section id="overlay-answer-pane">
+        <div
+          id="chat"
+          class="chat-scroll"
+          role="log"
+          aria-label="Interview chat"
+        ></div>
+      </section>
+      <section id="overlay-transcript-pane" hidden>
+        <div id="transcript" class="transcript-scroll"></div>
+      </section>
+      <section id="overlay-notes-pane" hidden>
+        <label class="notes-setting"
+          ><span data-i18n="notesEnabledLabel">Показывать заметки</span
+          ><input id="notesEnabled" type="checkbox" role="switch"
+        /></label>
+        <div id="notes-editor" class="notes-editor">
+          <textarea
+            id="notes"
+            maxlength="12000"
+            data-placeholder-i18n="notesPlaceholder"
+            aria-label="Interview notes"
+          ></textarea
+          ><label class="inline-check"
+            ><input id="includeNotes" type="checkbox" /><span
+              data-i18n="includeNotes"
+              >Учитывать в ответах</span
+            ></label
+          >
+        </div>
+        <p
+          id="notes-disabled"
+          class="help"
+          data-i18n="notesDisabled"
+          hidden
+        ></p>
+      </section>
+      <div class="compact-ai-status">
+        <button id="overlay-ask" class="text-button" data-i18n="answerSpeech">
+          Ответить на речь</button
+        ><span id="ai-status" role="status"></span
+        ><button
+          id="cancel-answer"
+          class="text-button"
+          hidden
+          data-i18n="cancel"
+        >
+          Остановить
+        </button>
+      </div>
+      <div data-composer></div>
+      <p id="compact-hint" class="compact-hint"></p>
     </div>
-    <div id="test-view" hidden>
+    <div id="test-view" class="capture-test-card" hidden>
       <div class="probe"></div>
-      <p>SYNTHETIC TEST CARD</p>
+      <p>SYNTHETIC COMPACT TEST</p>
       <h1>Screening</h1>
-      <p>Magenta marker = overlay captured</p>
+      <p>Magenta marker = window captured</p>
     </div>
+    <dialog id="compact-settings" class="compact-settings">
+      <header>
+        <h2 data-i18n="settings">Настройки</h2>
+        <button
+          id="close-compact-settings"
+          class="icon-button"
+          data-title-i18n="close"
+          aria-label="Close"
+        >
+          ×
+        </button>
+      </header>
+      <label class="setting-row"
+        ><span data-i18n="speech">Речь</span
+        ><select id="speechLanguage" class="language-select"></select
+      ></label>
+      <label class="setting-row"
+        ><span data-i18n="answerLanguageLabel">Язык ответа</span
+        ><select id="answerLanguage" class="language-select"></select
+      ></label>
+      <label class="setting-row"
+        ><span data-i18n="interviewType">Тип интервью</span
+        ><select id="interviewType">
+          <option value="general" data-i18n="typeGeneral"></option>
+          <option value="coding" data-i18n="typeCoding"></option>
+          <option value="system" data-i18n="typeSystem"></option>
+          <option value="behavioral" data-i18n="typeBehavioral"></option>
+          <option value="case" data-i18n="typeCase"></option>
+          <option value="hr" data-i18n="typeHr"></option></select
+      ></label>
+      <label class="setting-row"
+        ><span data-i18n="autoAnswer"></span
+        ><input id="autoAnswer" type="checkbox" role="switch"
+      /></label>
+      <label class="setting-row"
+        ><span data-i18n="uiLanguage"></span
+        ><select id="locale">
+          <option value="ru">Русский</option>
+          <option value="en">English</option>
+          <option value="kk">Қазақша</option>
+        </select></label
+      >
+      <label class="setting-row"
+        ><span data-i18n="answerStyle"></span
+        ><select id="style">
+          <option value="concise" data-i18n="concise"></option>
+          <option value="detailed" data-i18n="detailed"></option></select
+      ></label>
+      <button
+        id="check-account"
+        class="text-button"
+        data-i18n="checkAccount"
+      ></button>
+      <p class="help" data-i18n="bothProtectedHint"></p>
+      <button
+        data-action="lab"
+        class="secondary"
+        data-i18n="openWorkspace"
+      ></button>
+    </dialog>
     <p id="error" role="alert" class="error-toast" hidden></p>
+    <script src="controls.js"></script>
     <script src="i18n.js"></script>
     <script src="renderer.js"></script>
   </body>

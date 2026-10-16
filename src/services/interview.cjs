@@ -20,7 +20,12 @@ async function createInterview(
   app,
   publish,
   parent,
-  { windowCapture, getNotes = () => "" } = {},
+  {
+    windowCapture,
+    getNotes = () => "",
+    onLevel = () => {},
+    onDraft = () => {},
+  } = {},
 ) {
   const settings = {
     locale: "ru",
@@ -61,6 +66,7 @@ async function createInterview(
     settings,
     transcript: [],
     messages: [],
+    draft: "",
     attachment: null,
     recording: false,
     source: null,
@@ -112,6 +118,7 @@ async function createInterview(
             });
         }, 1400);
     },
+    onLevel,
   );
   state.whisper = whisper.state;
   await ai.status();
@@ -248,6 +255,13 @@ async function createInterview(
     }
   }
   async function request(op, payload) {
+    if (op === "draft") {
+      if (typeof payload !== "string" || payload.length > 16000)
+        throw new Error("Invalid draft");
+      state.draft = payload;
+      onDraft(payload);
+      return;
+    }
     if (op === "setting") {
       if (!payload || !validSetting(payload.key, payload.value))
         throw new Error("Invalid setting");
@@ -284,6 +298,7 @@ async function createInterview(
       whisper.clear();
       state.transcript = [];
       state.messages = [];
+      state.draft = "";
       state.attachment = null;
       state.error = null;
       ai.update({ answer: "", question: "", error: null });
@@ -291,13 +306,19 @@ async function createInterview(
       return;
     }
     if (op === "recording") {
-      if (typeof payload !== "boolean")
+      const active = typeof payload === "boolean" ? payload : payload?.active;
+      const source =
+        typeof payload === "boolean" ? "microphone" : payload?.source;
+      if (
+        typeof active !== "boolean" ||
+        (active && !["microphone", "system"].includes(source))
+      )
         throw new Error("Invalid recording state");
-      if (payload && !whisper.state.ready)
+      if (active && !whisper.state.ready)
         throw new Error("Load Whisper first.");
-      state.recording = payload;
-      state.source = payload ? "microphone" : null;
-      state.startedAt = payload ? Date.now() : state.startedAt;
+      state.recording = active;
+      state.source = active ? source : null;
+      state.startedAt = active ? Date.now() : state.startedAt;
       update();
       return;
     }
@@ -314,7 +335,7 @@ async function createInterview(
       return;
     }
     if (op === "stop") {
-      whisper.stop();
+      await whisper.stop();
       state.recording = false;
       state.source = null;
       update();

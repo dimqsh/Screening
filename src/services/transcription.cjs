@@ -3,10 +3,11 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 class Transcription {
-  constructor(cacheDir, onChange, onText) {
+  constructor(cacheDir, onChange, onText, onLevel = () => {}) {
     this.cacheDir = cacheDir;
     this.onChange = onChange;
     this.onText = onText;
+    this.onLevel = onLevel;
     this.worker = null;
     this.native = null;
     this.pending = new Map();
@@ -115,52 +116,98 @@ class Transcription {
     if (!this.state.ready) throw new Error("Load Whisper first.");
     if (this.native) throw new Error("Recording already started.");
     let data = Buffer.alloc(0),
-      diagnostic = "";
+      diagnostic = "",
+      ready = false,
+      lastLevelAt = 0;
     const child = spawn(helper, [], { stdio: ["ignore", "pipe", "pipe"] });
     this.native = child;
-    this.update({ recording: true, source: "system", error: null });
-    child.stdout.on("data", (chunk) => {
-      data = Buffer.concat([data, chunk]);
-      const bytes = 16000 * 8 * 4;
-      while (data.length >= bytes) {
-        const segment = data.subarray(0, bytes);
-        data = data.subarray(bytes);
-        const copy = new Uint8Array(segment).buffer;
-        this.transcribe(new Float32Array(copy), language).catch((e) =>
-          this.update({ error: e.message }),
+    this.update({ recording: false, source: "system", error: null });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(
+          new Error(
+            "System audio did not start. Check Screen & System Audio Recording permission.",
+          ),
         );
-      }
-    });
-    child.stderr.on("data", (chunk) => {
-      diagnostic += chunk;
-      if (diagnostic.length > 4000) diagnostic = diagnostic.slice(-4000);
-    });
-    child.once("error", (e) => {
-      this.native = null;
-      this.update({ recording: false, error: e.message });
-    });
-    child.once("close", (code) => {
-      this.native = null;
-      if (data.length >= 16000 * 4) {
-        const copy = new Uint8Array(
-          data.subarray(0, data.length - (data.length % 4)),
-        ).buffer;
-        this.transcribe(new Float32Array(copy), language).catch(() => {});
-      }
-      this.update({
-        recording: false,
-        ...(code && code !== 0
-          ? {
-              error:
-                diagnostic.trim().slice(-400) ||
-                "System audio capture stopped.",
+      }, 15000);
+      child.stdout.on("data", (chunk) => {
+        if (Date.now() - lastLevelAt > 200 && chunk.length >= 4) {
+          let energy = 0,
+            count = 0;
+          for (let i = 0; i + 4 <= chunk.length; i += 64) {
+            const sample = chunk.readFloatLE(i);
+            if (Number.isFinite(sample)) {
+              energy += sample * sample;
+              count++;
             }
-          : {}),
+          }
+          this.onLevel(
+            Math.min(1, Math.sqrt(energy / Math.max(1, count)) * 12),
+          );
+          lastLevelAt = Date.now();
+        }
+        data = Buffer.concat([data, chunk]);
+        const bytes = 16000 * 8 * 4;
+        while (data.length >= bytes) {
+          const segment = data.subarray(0, bytes);
+          data = data.subarray(bytes);
+          this.transcribe(
+            new Float32Array(new Uint8Array(segment).buffer),
+            language,
+          ).catch((e) => this.update({ error: e.message }));
+        }
+      });
+      child.stderr.on("data", (chunk) => {
+        diagnostic = (diagnostic + chunk).slice(-4000);
+        if (!ready && diagnostic.includes("SCREENING_AUDIO_READY")) {
+          ready = true;
+          clearTimeout(timer);
+          this.update({ recording: true, source: "system", error: null });
+          resolve();
+        }
+      });
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        this.native = null;
+        this.update({ recording: false, error: error.message });
+        reject(error);
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        this.native = null;
+        if (data.length >= 16000 * 4) {
+          const copy = new Uint8Array(
+            data.subarray(0, data.length - (data.length % 4)),
+          ).buffer;
+          this.transcribe(new Float32Array(copy), language).catch(() => {});
+        }
+        const message =
+          diagnostic.replace("SCREENING_AUDIO_READY", "").trim().slice(-400) ||
+          "System audio capture stopped. Check audio/screen permissions.";
+        this.update({
+          recording: false,
+          ...((code && code !== 0) || !ready ? { error: message } : {}),
+        });
+        this.onLevel(0);
+        if (!ready) reject(new Error(message));
       });
     });
   }
-  stop() {
-    this.native?.kill("SIGTERM");
+  async stop() {
+    const child = this.native;
+    if (child)
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          resolve();
+        }, 4000);
+        child.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        child.kill("SIGTERM");
+      });
     this.update({ recording: false, source: null });
   }
   clear() {

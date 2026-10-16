@@ -460,3 +460,81 @@ const screeningCopy = {
 };
 for (const language of Object.keys(screeningCopy))
   Object.assign(window.copy[language], screeningCopy[language]);
+
+const compactCopy = {
+  ru: {
+    audioChanging: "Подключаем…",
+    prepareFirst: "Дождитесь подготовки Whisper, затем включите звук.",
+    recordingHint:
+      "Речь появляется фрагментами примерно каждые 8 секунд. При остановке обрабатывается остаток.",
+    compactReadyHint:
+      "Напишите вопрос, снимите окно или включите звук собеседника.",
+    noAudioHint:
+      "Пока не слышно звука. Проверьте источник, громкость и разрешения ОС.",
+    answerSpeech: "Ответить на речь",
+    answerLanguageLabel: "Язык ответа",
+    bothProtectedHint:
+      "Защита захвата включена для обоих окон. Проверьте видимость у второго участника: некоторые способы записи могут её игнорировать.",
+    captureWindow: "Окно для проверки",
+    compactWindow: "Маленькое окно",
+    workspaceWindow: "Большое окно",
+    protection: "Защищать оба окна от захвата",
+    protectionHint:
+      "Применяется к большому и маленькому окну. Проверьте фактический вид у второго участника.",
+    overlay: "Окна приложения",
+  },
+  en: {
+    audioChanging: "Connecting…",
+    prepareFirst: "Wait for Whisper setup, then start audio.",
+    recordingHint:
+      "Speech arrives in roughly 8-second chunks. Stopping also processes the remaining audio.",
+    compactReadyHint:
+      "Type a question, capture a window, or start the interview audio.",
+    noAudioHint:
+      "No audio detected yet. Check the source, volume and OS permissions.",
+    answerSpeech: "Answer speech",
+    answerLanguageLabel: "Answer language",
+    bothProtectedHint:
+      "Capture protection is enabled for both windows. Check the actual recipient view: some recording paths may ignore it.",
+    captureWindow: "Window to test",
+    compactWindow: "Compact window",
+    workspaceWindow: "Workspace",
+    protection: "Protect both windows from capture",
+    protectionHint:
+      "Applies to the workspace and compact window. Check the actual recipient view.",
+    overlay: "Application windows",
+  },
+  kk: {
+    audioChanging: "Қосылуда…",
+    prepareFirst: "Whisper дайын болған соң дыбысты қосыңыз.",
+    recordingHint:
+      "Сөйлеу шамамен 8 секунд сайын мәтінге айналады. Тоқтағанда қалған дыбыс та өңделеді.",
+    compactReadyHint:
+      "Сұрақ жазыңыз, терезені түсіріңіз немесе сұхбат дыбысын қосыңыз.",
+    noAudioHint:
+      "Дыбыс әлі естілмейді. Дыбыс көзін, деңгейін және жүйе рұқсатын тексеріңіз.",
+    answerSpeech: "Сөйлеуге жауап",
+    answerLanguageLabel: "Жауап тілі",
+    bothProtectedHint:
+      "Екі терезеде де түсіруден қорғау қосылған. Қатысушының не көретінін тексеріңіз: кейбір жазу тәсілдері қорғанысты елемеуі мүмкін.",
+    captureWindow: "Тексерілетін терезе",
+    compactWindow: "Шағын терезе",
+    workspaceWindow: "Үлкен терезе",
+    protection: "Екі терезені де түсіруден қорғау",
+    protectionHint:
+      "Үлкен және шағын терезеге қолданылады. Қатысушының не көретінін тексеріңіз.",
+    overlay: "Қолданба терезелері",
+  },
+};
+for (const language of Object.keys(compactCopy))
+  Object.assign(window.copy[language], compactCopy[language]);
+
+Object.assign(window.copy.ru, { hideAll: "Скрыть оба окна · ⌘ / Ctrl ⇧ H" });
+Object.assign(window.copy.en, { hideAll: "Hide both windows · ⌘ / Ctrl ⇧ H" });
+Object.assign(window.copy.kk, {
+  hideAll: "Екі терезені жасыру · ⌘ / Ctrl ⇧ H",
+});
+
+window.copy.ru.stoppingAudio = "Завершаем…";
+window.copy.en.stoppingAudio = "Finishing…";
+window.copy.kk.stoppingAudio = "Аяқталуда…";

@@ -8,7 +8,10 @@ let current,
   lastResult = null,
   lastAttachment = null,
   errorTimer,
-  contextDirty = false;
+  contextDirty = false,
+  lastAudioAt = 0,
+  draftTimer,
+  draftDirty = false;
 const t = (key) => window.copy[locale]?.[key] || window.copy.en[key] || key;
 function error(message) {
   const target = $("error");
@@ -120,6 +123,10 @@ for (const key of [
       });
     }),
   );
+$("captureWindow")?.addEventListener(
+  "change",
+  safe((e) => api.change("captureWindow", e.target.value)),
+);
 $("capturePath")?.addEventListener(
   "change",
   safe((e) => api.change("capturePath", e.target.value)),
@@ -134,7 +141,7 @@ $("visibility")?.addEventListener(
 );
 $("hide")?.addEventListener(
   "click",
-  safe(() => api.change("visible", false)),
+  safe(() => api.action("hide-all")),
 );
 $("test")?.addEventListener(
   "click",
@@ -158,14 +165,21 @@ $("check-account")?.addEventListener(
   safe(() => api.request("account")),
 );
 $("account-shortcut")?.addEventListener("click", () => showView("settings"));
-$("new-chat")?.addEventListener(
-  "click",
-  safe(() => api.request("clear")),
+$("open-compact-settings")?.addEventListener("click", () =>
+  $("compact-settings").showModal(),
 );
-$("clear-session")?.addEventListener(
-  "click",
-  safe(() => api.request("clear")),
+$("close-compact-settings")?.addEventListener("click", () =>
+  $("compact-settings").close(),
 );
+async function clearConversation() {
+  if (current.interview.ai.busy) throw new Error(t("thinking"));
+  clearTimeout(draftTimer);
+  draftDirty = false;
+  if ($("question")) $("question").value = "";
+  await api.request("clear");
+}
+$("new-chat")?.addEventListener("click", safe(clearConversation));
+$("clear-session")?.addEventListener("click", safe(clearConversation));
 $("export-session")?.addEventListener(
   "click",
   safe(() => api.request("export")),
@@ -181,7 +195,7 @@ $("overlay-ask")?.addEventListener(
 );
 $("overlay-stop")?.addEventListener(
   "click",
-  safe(() => api.request("stop")),
+  safe(() => api.request("audio-stop")),
 );
 $("save-context")?.addEventListener(
   "click",
@@ -190,7 +204,7 @@ $("save-context")?.addEventListener(
       key: "context",
       value: $("candidate-context").value,
     });
-    contextDirty = false;
+    ((contextDirty = false), (lastAudioAt = 0));
     setText("context-saved", t("saved"));
   }),
 );
@@ -227,6 +241,7 @@ $("paste-question")?.addEventListener(
       "end",
     );
     field.focus();
+    queueDraft();
   }),
 );
 $("question-form")?.addEventListener(
@@ -234,19 +249,36 @@ $("question-form")?.addEventListener(
   safe(async (e) => {
     e.preventDefault();
     const field = $("question");
+    if (current.interview.ai.busy) throw new Error(t("thinking"));
+    if (!current.interview.ai.connected) throw new Error(t("disconnected"));
+    const previousMessages = current.interview.messages.length;
     const question = field.value.trim();
+    if (
+      !question &&
+      !current.interview.attachment &&
+      current.interview.whisper.pending
+    )
+      throw new Error(t("processing"));
     if (
       !question &&
       !current.interview.transcript.length &&
       !current.interview.attachment
     )
       throw new Error(t("noSpeech"));
+    clearTimeout(draftTimer);
+    draftDirty = false;
     field.value = "";
+    await api.request("draft", "");
     try {
       await api.request("answer", question);
     } catch (e) {
-      if (!field.value && !current.interview.messages.length)
+      if (
+        !field.value &&
+        current.interview.messages.length === previousMessages
+      ) {
         field.value = question;
+        await api.request("draft", question);
+      }
       throw e;
     }
   }),
@@ -279,9 +311,10 @@ async function loadWindows() {
             await api.request("window-capture", source.id);
             $("window-picker").close();
             $("question").focus();
+          } catch (error) {
+            setText("picker-status", error.message);
           } finally {
             pickerBusy = false;
-            setText("picker-status", "");
           }
         }),
       );
@@ -323,6 +356,24 @@ for (const button of document.querySelectorAll("[data-session-tab]"))
     $("session-transcript").hidden = button.dataset.sessionTab !== "transcript";
     $("session-notes").hidden = button.dataset.sessionTab !== "notes";
   });
+function applyDraft(value) {
+  const field = $("question");
+  if (field && !draftDirty && field.value !== value) field.value = value;
+}
+function queueDraft() {
+  draftDirty = true;
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(
+    safe(async () => {
+      const value = $("question").value;
+      await api.request("draft", value);
+      if ($("question").value === value) draftDirty = false;
+    }),
+    150,
+  );
+}
+$("question")?.addEventListener("input", queueDraft);
+api.onDraft(applyDraft);
 $("question")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
@@ -332,19 +383,13 @@ $("question")?.addEventListener("keydown", (e) => {
 $("record")?.addEventListener(
   "click",
   safe(async () => {
-    if (current.interview.recording) {
-      if (window.audioCapture.active()) await window.audioCapture.stop();
-      else await api.request("stop");
+    if (current.interview.recording) return api.request("audio-stop");
+    if (!current.interview.whisper.ready) {
+      await api.request("model");
+      setText("compact-hint", t("prepareFirst"));
       return;
     }
-    if (!current.interview.whisper.ready) {
-      showView("settings");
-      throw new Error(t("modelRequired"));
-    }
-    const source = $("audio-source").value;
-    if (source === "system" && current.platform === "darwin")
-      await api.request("system-start");
-    else await window.audioCapture.start(source);
+    await api.request("audio-start", $("audio-source").value);
   }),
 );
 window.addEventListener("audioerror", (e) => error(e.detail));
@@ -355,6 +400,9 @@ for (const tab of document.querySelectorAll("[data-overlay-tab]"))
       .forEach((el) => el.classList.toggle("active", el === tab));
     $("overlay-answer-pane").hidden = tab.dataset.overlayTab !== "answer";
     $("overlay-notes-pane").hidden = tab.dataset.overlayTab !== "notes";
+    if ($("overlay-transcript-pane"))
+      $("overlay-transcript-pane").hidden =
+        tab.dataset.overlayTab !== "transcript";
   });
 function renderText(target, text) {
   target.replaceChildren();
@@ -507,6 +555,7 @@ function render(s) {
   const interview = s.interview;
   if (!interview) return;
   const settings = interview.settings;
+  applyDraft(interview.draft || "");
   if (locale !== settings.locale || !document.body.dataset.translated) {
     locale = settings.locale;
     translate();
@@ -527,12 +576,6 @@ function render(s) {
     if ($(key)) $(key).checked = settings[key];
   if ($("notes-editor")) $("notes-editor").hidden = !settings.notesEnabled;
   if ($("notes-disabled")) $("notes-disabled").hidden = settings.notesEnabled;
-  if (document.body.classList.contains("overlay")) {
-    const notesTab = document.querySelector('[data-overlay-tab="notes"]');
-    notesTab.hidden = !settings.notesEnabled;
-    if (!settings.notesEnabled && !$("overlay-notes-pane").hidden)
-      document.querySelector('[data-overlay-tab="answer"]').click();
-  }
   renderChat(interview.messages || []);
   if ($("attachment")) {
     $("attachment").hidden = !interview.attachment;
@@ -555,9 +598,21 @@ function render(s) {
     $("notes").value = s.notes;
   setText("visibility", t(s.visible ? "hideOverlay" : "showOverlay"));
   setText("overlay-status", t(s.protection ? "protected" : "unprotected"));
+  setText(
+    "workspace-protection",
+    t(s.protection ? "protected" : "unprotected"),
+  );
+  for (const id of ["overlay-status", "workspace-protection"])
+    if ($(id)) $(id).dataset.protected = String(s.protection);
   if ($("notes-view")) {
-    $("notes-view").hidden = s.testCard;
-    $("test-view").hidden = !s.testCard;
+    const testing = s.testCard && s.testWindow !== "workspace";
+    $("notes-view").hidden = testing;
+    $("test-view").hidden = !testing;
+  }
+  if ($("workspace-test-view")) {
+    const testing = s.testCard && s.testWindow === "workspace";
+    $("workspace-test-view").hidden = !testing;
+    document.body.classList.toggle("test-workspace", testing);
   }
   const missingShortcuts = s.shortcuts.some((shortcut) => !shortcut.registered);
   if ($("view-settings")) {
@@ -609,6 +664,16 @@ function render(s) {
             : "loadModel",
       );
     }
+  if ($("compact-setup")) {
+    $("compact-setup").hidden = w.ready && ai.connected;
+    $("load-model").hidden = w.ready;
+    $("login").hidden = ai.connected;
+  }
+  if ($("compact-hint"))
+    setText(
+      "compact-hint",
+      t(interview.recording ? "recordingHint" : "compactReadyHint"),
+    );
   if ($("model-dot")) $("model-dot").classList.toggle("ready", w.ready);
   if ($("model-progress")) {
     $("model-progress").hidden = w.status !== "loading";
@@ -622,12 +687,34 @@ function render(s) {
   setText("processing", w.pending ? t("processing") : "");
   if ($("record-dot"))
     $("record-dot").classList.toggle("recording", interview.recording);
-  setText("record-label", t(interview.recording ? "stop" : "start"));
+  setText(
+    "record-label",
+    t(
+      s.audioControl?.busy
+        ? s.audioControl.phase === "stopping"
+          ? "stoppingAudio"
+          : "audioChanging"
+        : interview.recording
+          ? "stop"
+          : w.status === "loading"
+            ? "modelLoading"
+            : !w.ready
+              ? "loadModel"
+              : "start",
+    ),
+  );
   if ($("record")) {
     $("record").classList.toggle("is-recording", interview.recording);
-    $("record").disabled = !w.ready;
+    $("record").disabled =
+      Boolean(s.audioControl?.busy) || w.status === "loading";
   }
-  if ($("audio-source")) $("audio-source").disabled = interview.recording;
+  if ($("audio-source")) {
+    $("audio-source").disabled =
+      interview.recording || Boolean(s.audioControl?.busy);
+    if (interview.recording && interview.source)
+      $("audio-source").value = interview.source;
+  }
+  if (!interview.recording && $("audio-level")) $("audio-level").value = 0;
   if ($("speechLanguage")) $("speechLanguage").disabled = interview.recording;
   setText("overlay-recording", interview.recording ? t("listening") : "");
   if (!interview.recording && window.audioCapture?.active())
@@ -635,7 +722,11 @@ function render(s) {
   if ($("overlay-stop")) $("overlay-stop").hidden = !interview.recording;
   if ($("overlay-ask"))
     $("overlay-ask").disabled =
-      ai.busy || !ai.connected || !interview.transcript.length;
+      ai.busy ||
+      !ai.connected ||
+      s.audioControl?.busy ||
+      w.pending > 0 ||
+      (!interview.transcript.length && !interview.attachment);
   const transcriptKey = JSON.stringify(interview.transcript);
   if ($("transcript") && lastTranscript !== transcriptKey) {
     lastTranscript = transcriptKey;
@@ -689,6 +780,7 @@ function render(s) {
     document.body.dataset.error = issue;
     error(issue);
   } else if (!issue) delete document.body.dataset.error;
+  if ($("captureWindow")) $("captureWindow").value = s.captureWindow;
   if ($("capturePath")) {
     $("capturePath").value = s.capturePath;
     $("capturePath").querySelector("[value=sck]").disabled =
@@ -735,8 +827,22 @@ function render(s) {
       }
   }
 }
+api.onLevel((value) => {
+  if ($("audio-level")) $("audio-level").value = value;
+  if (value > 0.02) lastAudioAt = Date.now();
+});
 setInterval(() => {
   if (current?.interview.recording && $("elapsed")) {
+    if ($("compact-hint"))
+      setText(
+        "compact-hint",
+        t(
+          Date.now() - Math.max(lastAudioAt, current.interview.startedAt) >
+            10000
+            ? "noAudioHint"
+            : "recordingHint",
+        ),
+      );
     const seconds = Math.floor(
       (Date.now() - current.interview.startedAt) / 1000,
     );

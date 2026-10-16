@@ -41,7 +41,7 @@ jobs:
           export CAPTURE_LAB_ARTIFACTS="$PWD/validation/macos-ci"
           export CAPTURE_LAB_MODEL_CACHE="$PWD/build/model-cache"
           export CAPTURE_LAB_TEST_AUDIO="$PWD/build/jfk.f32"
-          "$PWD/build/dmg-check/Screening.app/Contents/MacOS/Screening" --verify --interview-test --screening-test > build/macos-verify.log 2>&1
+          "$PWD/build/dmg-check/Screening.app/Contents/MacOS/Screening" --verify --interview-test --screening-test --compact-test > build/macos-verify.log 2>&1
           cat build/macos-verify.log
           test -f validation/macos-ci/verification.json
       - uses: actions/upload-artifact@v4

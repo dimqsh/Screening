@@ -2,7 +2,7 @@
 
 Desktop interview chat for macOS and Windows. Local multilingual Whisper, answers through your ChatGPT account, window snapshots, optional notes, and a compact floating view. Formerly Capture Lab; the application ID and local data folder stay the same for upgrades.
 
-![Workspace with synthetic test text](assets/workspace.png)
+<img src="assets/workspace.png" width="540" alt="Screening compact workspace" />
 
 ## Use
 
@@ -13,11 +13,12 @@ Desktop interview chat for macOS and Windows. Local multilingual Whisper, answer
 5. Pick an interview type: general, coding, system design, behavioral, case/product, or HR. Type/paste a question and press Cmd/Ctrl+Enter. Ask follow-ups in the same chat. For the recent transcript, use **Send** with an empty composer or Cmd/Ctrl+Shift+Enter. Automatic voice answers are optional. Add real experience in **My context**.
 6. Select **Window snapshot**, choose one window, preview the attachment, then send your message. Each click takes one image; there is no background window tracking. Remove the attachment to discard it. A pending attachment pauses automatic voice answers so it can be reviewed before sending.
 7. In **Notes**, switch notes on/off. **Use in answers** separately controls whether their text goes to ChatGPT. Turning notes off preserves the text for the current session. Copy a message or an individual code block with its copy button. Paste text with the composer button or the usual keyboard shortcut.
-8. Use **Open compact view** when sharing your desktop. This hides the large workspace and opens the floating window. The main workspace is visible in screen captures.
+8. The app starts in its compact workspace. It includes recording controls, a live input meter, transcript, chat, notes, text paste, window snapshots and setup. Use the expand button for the larger workspace and candidate context. Closing the large window returns to compact view and keeps the audio/session alive. Use the application menu to quit.
+9. Both windows request native capture exclusion by default. **Hide both windows** or Cmd/Ctrl+Shift+H removes them from your desktop while audio continues; restore through the Dock/app icon, the menu or the show/recover shortcuts.
 
 Interface languages: Russian, English and Kazakh. Speech and answer selectors include automatic language selection and Russian, English, Kazakh, Spanish, French, German, Chinese, Japanese, Ukrainian and Turkish. Automatic speech language detection uses Whisper’s language-token logits. Language availability does not imply equal recognition accuracy; small models can mishear words, especially in noise and weaker-supported languages.
 
-Audio is processed in roughly eight-second chunks. The local queue is bounded; if the device cannot keep up, the app reports an error instead of growing an unlimited buffer. A bundled Silero detector filters chunks without detected speech before Whisper runs. It does not identify speakers. System audio can include sounds from other applications.
+Audio is processed in roughly eight-second chunks; the input meter moves before the first transcript arrives. Stop flushes the remaining audio through Whisper. Microphone and Windows loopback streams have one renderer owner; controls in either window address that owner and keep it running while its window is hidden. macOS system capture waits for a native ready acknowledgement before showing a recording state. The local queue is bounded; if the device cannot keep up, the app reports an error instead of growing an unlimited buffer. A bundled Silero detector filters chunks without detected speech before Whisper runs. It does not identify speakers. System audio can include sounds from other applications.
 
 ## Account and data
 
@@ -29,15 +30,18 @@ Raw audio, transcripts, chat messages, notes and window images are held in memor
 
 ## Screen capture
 
-The compact window requests native content protection. The workspace does not. The capture experiment compares a magenta marker with protection off and on; a missing unprotected marker is inconclusive. Always check the actual recipient view for your meeting app and recorder.
+Both the compact and large windows request native content protection before they are first shown. The shared protection switch applies to both. Choose the compact or large window for the capture experiment. It displays a synthetic card and compares its magenta marker with protection off and on; a missing unprotected marker is inconclusive. Always check the actual recipient view for your meeting app and recorder.
 
-Historical verification: version 0.1.0 was tested with Google Meet entire built-in-screen sharing on macOS 27.0.1 / Chrome 155. Two independently joined connections on the same Mac showed the overlay with protection off and omitted it with protection on. This was not a second physical device. Local regression checks cover Electron desktop capture and Apple ScreenCaptureKit; the historical Meet check does not establish every version or capture path. No private meeting screenshots are included in this repository.
+Historical verification: version 0.1.0 was tested with Google Meet entire built-in-screen sharing on macOS 27.0.1 / Chrome 155. Two independently joined connections on the same Mac showed the overlay with protection off and omitted it with protection on. This was not a second physical device. Local regression checks cover Electron desktop capture and Apple ScreenCaptureKit; the historical Meet check does not establish every version or capture path. Version 0.4.0 adds separate local A/B checks for both windows. No private meeting screenshots are included in this repository.
+
+Native capture exclusion is not a universal bypass. Electron documents that newer macOS ScreenCaptureKit recorders may ignore the flag; Windows also limits the guarantee to supported capture APIs. The app does not bypass OS microphone/screen permissions, application security controls or process inspection. Use the actual recipient view to determine whether a particular capture path respects protection.
 
 Hotkeys:
 
 | Action                   | Shortcut             |
 | ------------------------ | -------------------- |
 | Show/hide compact window | Cmd/Ctrl+Shift+Space |
+| Hide both windows        | Cmd/Ctrl+Shift+H     |
 | Recover mouse control    | Cmd/Ctrl+Shift+R     |
 | Show workspace           | Cmd/Ctrl+Shift+L     |
 | Answer recent transcript | Cmd/Ctrl+Shift+Enter |
@@ -57,7 +61,7 @@ npm run package:mac # Apple Silicon DMG, on macOS
 npm run package:win # x64 NSIS EXE, on Windows
 ```
 
-`npm run verify` exercises native protection flags, recovery, IPC validation, editable notes, renderer isolation and interface language switching. To exercise real speech recognition, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:interview`. `--live-ai-test` additionally makes a real account-backed request; it requires ChatGPT sign-in. `--screening-test` checks notes, paste and minimum window layout; combine it with `--vision-test` to capture a synthetic task window through the OS, send its image to ChatGPT, ask a follow-up and verify code copying. This consumes two account-backed requests and needs screen access.
+`npm run verify` exercises native protection flags, recovery, IPC validation, editable notes, renderer isolation and interface language switching. To exercise real speech recognition, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:interview`. `--live-ai-test` additionally makes a real account-backed request; it requires ChatGPT sign-in. `--compact-test` exercises compact controls, Unicode paste, hidden-workspace recording, closing the workspace, emergency hide/recovery, input level and final-buffer transcription through a synthetic MediaStream, real AudioWorklet and real Whisper. This is not a physical-microphone test. `--system-audio-test` on macOS expects external speech playback after the native-audio-ready marker; it checks real system audio from compact controls. `--screening-test` checks notes, paste and minimum window layout; combine it with `--vision-test` to capture a synthetic task window through the OS, send its image to ChatGPT, ask a follow-up and verify code copying. This consumes two account-backed requests and needs screen access.
 
 The Windows release workflow builds a native Windows installer, installs the EXE and launches the installed application and checks actual Whisper transcription of the public JFK sample. It does not establish a Windows meeting-recipient capture result or test the interactive OAuth flow on a Windows user’s account.
 

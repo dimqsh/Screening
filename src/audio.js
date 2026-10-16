@@ -7,7 +7,8 @@ window.audioCapture = (() => {
     source,
     samples = [],
     count = 0,
-    stopping = false;
+    stopping = false,
+    lastLevelAt = 0;
   const downsample = (input, from) => {
     const ratio = from / 16000,
       out = new Float32Array(Math.floor(input.length / ratio));
@@ -83,8 +84,23 @@ window.audioCapture = (() => {
       sink.connect(context.destination);
       samples = [];
       count = 0;
-      await window.captureLab.request("recording", true);
+      await window.captureLab.request("recording", {
+        active: true,
+        source: kind,
+      });
       processor.port.onmessage = (event) => {
+        if (performance.now() - lastLevelAt > 200) {
+          let energy = 0;
+          for (let i = 0; i < event.data.length; i += 16)
+            energy += event.data[i] ** 2;
+          window.captureLab.level(
+            Math.min(
+              1,
+              Math.sqrt(energy / Math.ceil(event.data.length / 16)) * 12,
+            ),
+          );
+          lastLevelAt = performance.now();
+        }
         samples.push(event.data);
         count += event.data.length;
         if (count >= context.sampleRate * 8)
@@ -101,5 +117,15 @@ window.audioCapture = (() => {
       throw e;
     }
   }
+  window.captureLab.onAudioCommand(async ({ id, action, kind }) => {
+    try {
+      if (action === "start") await start(kind);
+      else if (action === "stop") await stop();
+      else throw new Error("Unknown audio command");
+      await window.captureLab.audioComplete(id, null);
+    } catch (error) {
+      await window.captureLab.audioComplete(id, error.message);
+    }
+  });
   return { start, stop, active: () => !!context };
 })();

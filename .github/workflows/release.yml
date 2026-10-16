@@ -44,7 +44,7 @@ jobs:
             throw 'Installed executable is missing'
           }
           Write-Host "Testing installed app: $installedExe"
-          $app = Start-Process -FilePath $installedExe -ArgumentList '--verify','--interview-test','--screening-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
+          $app = Start-Process -FilePath $installedExe -ArgumentList '--verify','--interview-test','--screening-test','--compact-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
           Get-Content "$pwd/build/windows-verify.log"
           Get-Content "$pwd/build/windows-verify-error.log"
           if ($app.ExitCode -ne 0) { throw "App verification failed: $($app.ExitCode)" }

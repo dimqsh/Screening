@@ -27,11 +27,24 @@ jobs:
           $env:CAPTURE_LAB_MODEL_CACHE = "$pwd/build/model-cache"
           $env:CAPTURE_LAB_TEST_AUDIO = "$pwd/build/jfk.f32"
           $installer = (Get-ChildItem "$pwd/dist/*win-x64.exe").FullName
-          $installRoot = "$pwd/build/installed"
-          $setup = Start-Process -FilePath $installer -ArgumentList '/S',"/D=$installRoot" -Wait -PassThru
+          $installRoot = Join-Path $pwd 'build\installed'
+          $setup = Start-Process -FilePath $installer -ArgumentList '/S','/currentuser',"/D=$installRoot" -Wait -PassThru
           if ($setup.ExitCode -ne 0) { throw "Installer failed: $($setup.ExitCode)" }
-          if (!(Test-Path "$installRoot/Capture Lab.exe")) { throw 'Installed executable is missing' }
-          $app = Start-Process -FilePath "$installRoot/Capture Lab.exe" -ArgumentList '--verify','--interview-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
+          $installedExe = Join-Path $installRoot 'Capture Lab.exe'
+          for ($attempt=0; $attempt -lt 60; $attempt++) {
+            if (Test-Path $installedExe) { break }
+            $programs = Join-Path $env:LOCALAPPDATA 'Programs'
+            $found = Get-ChildItem $programs -Filter 'Capture Lab.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $installedExe = $found.FullName; break }
+            Start-Sleep -Seconds 2
+          }
+          if (!(Test-Path $installedExe)) {
+            Get-ChildItem $installRoot -ErrorAction SilentlyContinue
+            Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -Like '*Capture Lab*' | Format-List DisplayName,InstallLocation
+            throw 'Installed executable is missing'
+          }
+          Write-Host "Testing installed app: $installedExe"
+          $app = Start-Process -FilePath $installedExe -ArgumentList '--verify','--interview-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
           Get-Content "$pwd/build/windows-verify.log"
           Get-Content "$pwd/build/windows-verify-error.log"
           if ($app.ExitCode -ne 0) { throw "App verification failed: $($app.ExitCode)" }
@@ -44,6 +57,7 @@ jobs:
             validation/windows/
             build/windows-verify*.log
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: Windows-installer
-          path: dist/*.exe
+          path: dist/*win-x64.exe

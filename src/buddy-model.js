@@ -34,6 +34,7 @@
       modelLoading: interview?.whisper?.status === "loading",
       modelProgress: interview?.whisper?.progress ?? null,
       signingIn: interview?.ai?.status === "signing-in",
+      source: interview?.source || null,
     };
     if (!snapshot?.buddy?.enabled) return { ...view, mode: "off" };
     const needsWhisper = !interview?.whisper?.ready;
@@ -90,5 +91,50 @@
     return turns;
   }
 
-  return { deriveBuddy, formatElapsed, listTurns };
+  // The character's face for each moment.
+  function buddyMood(view) {
+    if (view.mode === "off" || view.mode === "setup") return "sleepy";
+    if (view.mode === "thinking") return "thinking";
+    if (view.mode === "answer") return view.answerPending ? "reading" : "happy";
+    if (view.mode === "error") return "worried";
+    return view.recording ? "listening" : "idle";
+  }
+
+  const clip = (text, max) =>
+    text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+
+  // Three steps beside the character: listen, hear, answer. One is lit.
+  function buddyActivity(view) {
+    const source = view.source === "microphone" ? "your mic" : "call audio";
+    const listen = view.recording
+      ? `Listening to ${source} · ${view.elapsed}`
+      : "Ready to listen";
+    const hear = view.lastLine
+      ? `“${clip(view.lastLine, 56)}”`
+      : view.recording
+        ? "Waiting for speech…"
+        : "Nothing heard yet";
+    const answer =
+      view.mode === "thinking"
+        ? "Thinking…"
+        : view.mode === "answer"
+          ? view.answerPending
+            ? "Answering…"
+            : "Answer ready"
+          : view.mode === "error"
+            ? "No answer this time"
+            : "Ask anything";
+    const lit = ["thinking", "answer", "error"].includes(view.mode)
+      ? "answer"
+      : view.recording && view.lastLine
+        ? "hear"
+        : "listen";
+    return [
+      { key: "listen", text: listen },
+      { key: "hear", text: hear },
+      { key: "answer", text: answer },
+    ].map((row) => ({ ...row, active: row.key === lit }));
+  }
+
+  return { deriveBuddy, formatElapsed, listTurns, buddyMood, buddyActivity };
 });

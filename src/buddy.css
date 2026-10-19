@@ -275,11 +275,13 @@ kbd {
   box-shadow: 0 0 8px rgba(255, 107, 139, 0.8);
 }
 
-/* The orb: a small living light. */
-.orb-button {
+/* Buddy, the character: a soft round face with two eyes. Moods change the
+   eyes; every movement is a transform or opacity change, and an idle,
+   collapsed Buddy animates nothing except a blink every few seconds. */
+.face-button {
   width: 24px;
   height: 24px;
-  margin: -5px;
+  margin: -4px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -288,73 +290,168 @@ kbd {
   place-items: center;
   flex: none;
 }
-.orb {
+.face {
+  --face: 18px;
+  --ink-eye: #0f1724;
   position: relative;
-  width: 14px;
-  height: 14px;
+  display: inline-block;
+  flex: none;
+  width: var(--face);
+  height: var(--face);
+  font-size: var(--face);
+}
+.face-mini {
+  --face: 17px;
+}
+.face-tiny {
+  --face: 20px;
+}
+.face-big {
+  --face: 68px;
+}
+.island.open .face-mini {
+  --face: 19px;
+}
+.face .halo {
+  position: absolute;
+  inset: -38%;
   border-radius: 50%;
-  overflow: hidden;
-  box-shadow:
-    0 0 8px rgba(124, 92, 255, 0.7),
-    0 0 18px rgba(54, 209, 255, 0.35);
-  transform: scale(calc(1 + var(--level) * 0.45));
+  background: radial-gradient(
+    circle,
+    rgba(130, 185, 255, 0.55) 0%,
+    rgba(130, 185, 255, 0.18) 42%,
+    rgba(130, 185, 255, 0) 70%
+  );
+  opacity: 0.75;
+  transform: scale(calc(1 + var(--level) * 0.35));
   transition:
     transform 90ms linear,
-    width 300ms var(--ease-open),
-    height 300ms var(--ease-open);
+    opacity 200ms;
 }
-/* The colors live on their own layer, so spinning is a GPU rotation, not a repaint. */
-.orb::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: conic-gradient(
-    var(--violet),
-    var(--cyan),
-    var(--mint),
-    var(--violet)
-  );
-}
-.island.open .orb::before,
-.island.recording .orb::before {
-  animation: spin 9s linear infinite;
-  will-change: transform;
-}
-.orb::after {
-  content: "";
+.face .head {
   position: absolute;
   inset: 0;
   border-radius: 50%;
   background: radial-gradient(
-    circle at 34% 30%,
-    rgba(255, 255, 255, 0.95) 0 9%,
-    rgba(255, 255, 255, 0.22) 24%,
-    transparent 50%
+    circle at 34% 28%,
+    #ffffff 0%,
+    #f3f7fc 36%,
+    #d8e4f2 70%,
+    #b4c7e0 100%
   );
+  box-shadow:
+    inset 0 -0.06em 0.12em rgba(70, 100, 150, 0.32),
+    inset 0 0.04em 0.05em rgba(255, 255, 255, 0.9);
+  overflow: hidden;
 }
-.island.open .orb {
-  width: 17px;
-  height: 17px;
+.face .eyes {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.17em;
+  padding-top: 0.12em;
+  transform: translate(var(--look-x, 0em), var(--look-y, 0em));
+  transition: transform 180ms var(--ease-close);
 }
-.island[data-mode="thinking"] .orb::before,
-.island.streaming .orb::before {
-  animation: spin 1.1s linear infinite;
-  will-change: transform;
+.face .eye {
+  display: block;
+  width: 0.13em;
+  height: 0.27em;
+  border-radius: 999px;
+  background: var(--ink-eye);
+  transform-origin: 50% 60%;
+  transition:
+    transform 110ms ease-in,
+    height 200ms,
+    width 200ms,
+    border-radius 200ms;
 }
-.island[data-mode="setup"] .orb {
-  --violet: #ffc861;
-  --cyan: #ff9f6b;
-  --mint: #ffe39a;
+.face.blink .eye {
+  transform: scaleY(0.1);
 }
-.island[data-mode="error"] .orb {
-  --violet: #ff6b8b;
-  --cyan: #ffc861;
-  --mint: #ff8f6b;
+.face[data-mood="sleepy"] .eye {
+  height: 0.045em;
+  width: 0.16em;
+  border-radius: 0.03em;
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+.face[data-mood="happy"] .eye {
+  height: 0.09em;
+  width: 0.17em;
+  background: transparent;
+  border: 0.045em solid var(--ink-eye);
+  border-bottom: 0;
+  border-radius: 0.1em 0.1em 0 0;
+}
+.face[data-mood="worried"] .eye {
+  height: 0.2em;
+}
+.face[data-mood="worried"] .eye:first-child {
+  transform: rotate(-14deg);
+}
+.face[data-mood="worried"] .eye:last-child {
+  transform: rotate(14deg);
+}
+.face[data-mood="thinking"] {
+  --look-x: 0.05em;
+  --look-y: -0.07em;
+}
+.face[data-mood="reading"] .eyes {
+  --look-y: 0.05em;
+  animation: scan 1.6s ease-in-out infinite;
+}
+.face[data-mood="listening"] .halo,
+.face[data-mood="reading"] .halo {
+  opacity: 1;
+}
+@keyframes scan {
+  50% {
+    transform: translate(0.07em, 0.05em);
+  }
+}
+/* The "•••" badge, as in a chat bubble, while Buddy thinks. */
+.face .dots {
+  position: absolute;
+  top: -0.06em;
+  left: -0.08em;
+  width: 0.36em;
+  height: 0.36em;
+  border-radius: 50%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.035em;
+  background: linear-gradient(135deg, #5b8cff, #3b6cf0);
+  box-shadow:
+    0 0.03em 0.08em rgba(0, 0, 0, 0.4),
+    0 0 0 0.03em #0f0f12;
+}
+.face .dots i {
+  display: block;
+  width: 0.05em;
+  height: 0.05em;
+  border-radius: 50%;
+  background: #fff;
+}
+.face[data-mood="thinking"] .dots {
+  display: flex;
+}
+.face[data-mood="thinking"] .dots i {
+  animation: hop 1s ease-in-out infinite;
+}
+.face[data-mood="thinking"] .dots i:nth-child(2) {
+  animation-delay: 120ms;
+}
+.face[data-mood="thinking"] .dots i:nth-child(3) {
+  animation-delay: 240ms;
+}
+@keyframes hop {
+  30% {
+    transform: translateY(-0.03em);
+  }
+  60% {
+    transform: translateY(0);
   }
 }
 
@@ -375,18 +472,11 @@ kbd {
   pointer-events: auto;
   transition: opacity 260ms 110ms;
 }
-.head {
+.topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 36px;
-}
-.status {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-  min-width: 0;
-  flex: 1;
+  gap: 10px;
+  min-height: 38px;
 }
 .title {
   font-size: 14px;
@@ -399,88 +489,66 @@ kbd {
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
-.controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: -6px;
+.glance-face,
+.island:not(.glance) .title,
+.island:not(.glance) .meta {
+  display: none;
 }
-.segmented {
+.island.glance .glance-face {
+  display: inline-block;
+}
+.icon-tabs {
   display: inline-flex;
+  gap: 2px;
   padding: 3px;
-  border-radius: 11px;
+  border-radius: 999px;
   background: var(--surface);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
-.seg {
-  height: 26px;
-  padding: 0 11px;
+.tab {
+  width: 30px;
+  height: 30px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
   background: transparent;
-  font-size: 12px;
-  font-weight: 600;
   color: var(--ink-3);
   transition:
     background-color 150ms,
     color 150ms;
 }
-.seg:hover:enabled {
+.tab svg {
+  width: 15px;
+  height: 15px;
+}
+.tab:hover {
   color: var(--ink);
 }
-.seg[aria-checked="true"] {
-  color: var(--ink);
-  background: var(--surface-2);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-}
-.listen {
-  height: 32px;
-  padding: 0 14px 0 12px;
-  border: 0;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  font-weight: 650;
+.tab[aria-selected="true"] {
   color: #0b0b12;
-  background: linear-gradient(135deg, #b3a4ff 0%, #7fe3ff 100%);
-  box-shadow:
-    0 6px 18px rgba(124, 92, 255, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
-  transition:
-    filter 150ms,
-    transform 120ms;
+  background: #f1f4f9;
 }
-.listen:hover:enabled {
-  filter: brightness(1.07);
+.status-icons {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: -6px;
 }
-.listen:active:enabled {
-  transform: scale(0.97);
+.status-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: var(--mint);
 }
-.listen-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
+.status-icon svg {
+  width: 15px;
+  height: 15px;
 }
-.listen.on {
-  color: #fff;
-  background: linear-gradient(135deg, #ff5a76 0%, #ff8a5c 100%);
-  box-shadow:
-    0 6px 18px rgba(255, 90, 118, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-}
-.listen.on .listen-dot {
-  border-radius: 2px;
-}
-.island.open .listen.on .listen-dot {
-  animation: pulse 1.4s ease-in-out infinite;
-}
-@keyframes pulse {
-  50% {
-    opacity: 0.45;
-  }
+.status-icon[data-protected="false"] {
+  color: var(--rose);
 }
 .tool {
   width: 30px;
@@ -509,42 +577,152 @@ kbd {
   height: 16px;
 }
 
-.tabs {
+/* Hero: Buddy with what it is doing, and the four things you do most. */
+.hero {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+.card {
+  border-radius: 20px;
+  background: #101013;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.buddy-card {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
+  gap: 16px;
+  padding: 16px 14px 16px 18px;
+  min-width: 0;
 }
-.tab {
-  height: 28px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  font-size: 12.5px;
-  font-weight: 600;
+.activity {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.activity li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
   color: var(--ink-3);
   transition:
+    color 200ms,
+    font-size 200ms;
+}
+.activity li span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity svg {
+  width: 13px;
+  height: 13px;
+  opacity: 0.8;
+}
+.activity li.active {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.activity li.active svg {
+  width: 15px;
+  height: 15px;
+  opacity: 1;
+  color: #9cc4ff;
+}
+.chips {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px;
+  align-content: center;
+}
+.chip {
+  --chip: #34d3b6;
+  height: 38px;
+  min-width: 0;
+  padding: 0 10px 0 5px;
+  border: 0;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chip) 13%, #0d0d10);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chip) 34%, transparent);
+  transition:
     background-color 150ms,
-    color 150ms;
+    transform 120ms,
+    box-shadow 150ms;
 }
-.tab:hover {
-  color: var(--ink);
+.chip:hover:enabled {
+  background: color-mix(in srgb, var(--chip) 22%, #0d0d10);
 }
-.tab[aria-selected="true"] {
-  color: var(--ink);
-  background: var(--surface-2);
+.chip:active:enabled {
+  transform: scale(0.97);
 }
-.tab .count {
-  margin-left: 6px;
-  font-size: 11px;
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
+.chip .chip-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip-icon {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #0b0b10;
+  background: var(--chip);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--chip) 45%, transparent);
+}
+.chip-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.2;
+}
+.chip .when-live,
+.chip.live .when-idle {
+  display: none;
+}
+.chip.live .when-live {
+  display: block;
+}
+.chip.teal {
+  --chip: #34d3b6;
+}
+.chip.violet {
+  --chip: #9b8cff;
+}
+.chip.amber {
+  --chip: #ffb547;
+}
+.chip.coral {
+  --chip: #ff7a7a;
+}
+.chip.live {
+  --chip: #ff5a76;
+}
+.island.open .chip.live .chip-icon {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--chip) 18%, transparent);
+  }
 }
 .link {
-  margin-left: auto;
   border: 0;
   background: transparent;
   font-size: 12px;
@@ -555,15 +733,17 @@ kbd {
 .link:hover:enabled {
   color: var(--ink);
 }
-
 .views {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 .view {
   display: none;
 }
 .view.active {
   display: block;
+}
+.view-hint {
+  margin-top: 10px;
 }
 .view-foot {
   display: flex;
@@ -574,6 +754,12 @@ kbd {
 }
 
 /* Setup */
+.setup-hero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 4px 4px 2px 8px;
+}
 .setup-title {
   font-size: 20px;
   font-weight: 700;
@@ -722,7 +908,7 @@ kbd {
 /* Teleprompter: large, high-contrast lines that fade in and out at the edges. */
 .reading {
   margin-top: 10px;
-  max-height: 252px;
+  max-height: 196px;
   overflow-y: auto;
   padding: 8px 2px 18px;
   font-size: 18px;
@@ -892,7 +1078,7 @@ kbd {
 
 /* Transcript */
 .transcript {
-  max-height: 268px;
+  max-height: 196px;
   overflow-y: auto;
   scrollbar-width: thin;
   display: grid;
@@ -925,7 +1111,7 @@ kbd {
 .field {
   display: block;
   width: 100%;
-  height: 200px;
+  height: 168px;
   resize: none;
   border: 0;
   border-radius: 14px;
@@ -1120,9 +1306,9 @@ input[role="switch"]:checked::after {
 }
 
 /* Reading view: an answer that opened by itself shows only the answer. */
-.island.glance .controls .segmented,
-.island.glance #listen,
-.island.glance .tabs,
+.island.glance .icon-tabs,
+.island.glance #new-session,
+.island.glance .hero,
 .island.glance .composer,
 .island.glance .turns {
   display: none;
@@ -1130,7 +1316,10 @@ input[role="switch"]:checked::after {
 .island.glance .views {
   margin-top: 6px;
 }
-
+/* Without the hero row, the reading view has room for more of the answer. */
+.island.glance .reading {
+  max-height: 300px;
+}
 /* Capture experiment: an opaque marker card replaces the island. */
 .capture-probe {
   position: fixed;

@@ -440,10 +440,10 @@ module.exports = async function verify(ctx) {
       true,
     );
     try {
-      await js(`document.querySelector('[data-source="microphone"]').click()`);
-      await click("listen");
+      const micChip = `document.querySelector('[data-source="microphone"]').click()`;
+      await js(micChip);
       await until(() => interview.state.recording && !audioControl.busy);
-      check("Buddy's Listen button starts the hidden audio engine", () => {
+      check("Buddy's Microphone chip starts the hidden audio engine", () => {
         assert.equal(interview.state.source, "microphone");
         assert.equal(engine.isVisible(), false);
       });
@@ -458,7 +458,11 @@ module.exports = async function verify(ctx) {
       await delay(800);
       check("Audio level reaches Buddy", () => assert.ok(audioControl.peak > 0.02));
       await shot("buddy-listening-live.png");
-      await click("listen");
+      const live = await js(
+        `document.querySelector('[data-source="microphone"]').classList.contains("live")`,
+      );
+      check("The live chip turns into Stop", () => assert.equal(live, true));
+      await js(micChip);
       await until(() => !interview.state.recording && !audioControl.busy);
       await until(() => !interview.state.whisper.pending, 30000);
       const tail = interview.state.transcript
@@ -482,13 +486,12 @@ module.exports = async function verify(ctx) {
 
   if (has("--system-audio-test") && process.platform === "darwin") {
     await interview.request("clear");
-    await js(`document.querySelector('[data-source="system"]').click()`);
-    await until(() => interview.state.settings.source === "system");
-    await click("listen");
+    const callChip = `document.querySelector('[data-source="system"]').click()`;
+    await js(callChip);
     await until(() => interview.state.recording && !audioControl.busy);
     await fs.writeFile(path.join(artifactDir, "native-audio-ready"), "ready");
     await delay(14500);
-    await click("listen");
+    await js(callChip);
     await until(
       () =>
         !interview.state.recording &&

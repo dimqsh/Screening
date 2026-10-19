@@ -372,12 +372,15 @@ const {
 const { Transcription } = require("../src/services/transcription.cjs");
 test("model files follow the dtype naming used by Transformers.js", () => {
   const base = modelFiles("/cache", { id: "onnx-community/whisper-base", dtype: "q8" });
+  // Paths use the platform separator, so the expected files are joined too.
+  const { join } = require("node:path");
+  const onnx = join("/cache", "onnx-community", "whisper-base", "onnx");
   assert.deepEqual(base, [
-    "/cache/onnx-community/whisper-base/onnx/encoder_model_quantized.onnx",
-    "/cache/onnx-community/whisper-base/onnx/decoder_model_merged_quantized.onnx",
+    join(onnx, "encoder_model_quantized.onnx"),
+    join(onnx, "decoder_model_merged_quantized.onnx"),
   ]);
   const q4 = modelFiles("/cache", { id: "onnx-community/whisper-small", dtype: "q4" });
-  assert.match(q4[0], /whisper-small\/onnx\/encoder_model_q4\.onnx$/);
+  assert.match(q4[0], /whisper-small[\\/]onnx[\\/]encoder_model_q4\.onnx$/);
   assert.throws(() => modelFiles("/cache", { id: "x/y", dtype: "unknown" }));
 });
 test("the speech model is multilingual and says how big its download is", () => {

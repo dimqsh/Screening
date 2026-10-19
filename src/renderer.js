@@ -109,6 +109,7 @@ for (const key of [
   "interviewType",
   "notesEnabled",
   "includeNotes",
+  "buddy",
 ])
   $(key)?.addEventListener(
     "change",
@@ -159,6 +160,15 @@ for (const id of ["load-model", "prepare-model"])
 $("login")?.addEventListener(
   "click",
   safe(() => api.request("login")),
+);
+$("buddy-chip")?.addEventListener(
+  "click",
+  safe(() =>
+    api.request("setting", {
+      key: "buddy",
+      value: current.interview.settings.buddy === false,
+    }),
+  ),
 );
 $("check-account")?.addEventListener(
   "click",
@@ -574,6 +584,12 @@ function render(s) {
       $(key).value = settings[key];
   for (const key of ["autoAnswer", "notesEnabled", "includeNotes"])
     if ($(key)) $(key).checked = settings[key];
+  if ($("buddy")) $("buddy").checked = settings.buddy !== false;
+  if ($("buddy-chip")) {
+    const on = settings.buddy !== false;
+    $("buddy-chip").setAttribute("aria-pressed", String(on));
+    $("buddy-chip").title = t(on ? "buddyHide" : "buddySetting");
+  }
   if ($("notes-editor")) $("notes-editor").hidden = !settings.notesEnabled;
   if ($("notes-disabled")) $("notes-disabled").hidden = settings.notesEnabled;
   renderChat(interview.messages || []);

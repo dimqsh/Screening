@@ -49,7 +49,9 @@
           alt="" />Screening <small id="overlay-status"></small
       ></span>
       <div class="overlay-window-actions">
-        <button
+        <button id="buddy-chip" class="buddy-chip" type="button" aria-pressed="true"
+          ><span class="chip-orb" aria-hidden="true"></span>Buddy</button
+        ><button
           id="open-compact-settings"
           class="icon-button"
           data-title-i18n="settings"
@@ -220,6 +222,10 @@
       <label class="setting-row"
         ><span data-i18n="autoAnswer"></span
         ><input id="autoAnswer" type="checkbox" role="switch"
+      /></label>
+      <label class="setting-row"
+        ><span data-i18n="buddySetting"></span
+        ><input id="buddy" type="checkbox" role="switch" checked
       /></label>
       <label class="setting-row"
         ><span data-i18n="uiLanguage"></span

@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld("captureLab", {
   state: () => ipcRenderer.invoke("lab:state"),
   change: (key, value) => ipcRenderer.invoke("lab:change", key, value),
   action: (name) => ipcRenderer.invoke("lab:action", name),
+  buddyMouse: (inside) => ipcRenderer.send("buddy:mouse", Boolean(inside)),
   subscribe: (callback) => {
     const listener = (_, value) => callback(value);
     ipcRenderer.on("lab:update", listener);

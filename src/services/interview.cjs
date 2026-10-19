@@ -37,6 +37,7 @@ async function createInterview(
     interviewType: "general",
     notesEnabled: true,
     includeNotes: false,
+    buddy: true,
   };
   const location = path.join(app.getPath("userData"), "settings.json");
   try {
@@ -50,6 +51,7 @@ async function createInterview(
       "interviewType",
       "notesEnabled",
       "includeNotes",
+      "buddy",
     ])
       if (validSetting(k, saved[k])) settings[k] = saved[k];
     if (saved.contextEncrypted && safeStorage.isEncryptionAvailable())
@@ -165,7 +167,7 @@ async function createInterview(
     if (["speechLanguage", "answerLanguage"].includes(key))
       return LANGUAGE_CODES.includes(value);
     if (key === "locale") return ["ru", "en", "kk"].includes(value);
-    if (["autoAnswer", "notesEnabled", "includeNotes"].includes(key))
+    if (["autoAnswer", "notesEnabled", "includeNotes", "buddy"].includes(key))
       return typeof value === "boolean";
     if (key === "interviewType")
       return [

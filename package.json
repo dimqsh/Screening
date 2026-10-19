@@ -1,6 +1,6 @@
 {
   "name": "screening",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Interview chat with local multilingual Whisper, ChatGPT and window snapshots",
   "main": "src/main.cjs",
   "private": true,
@@ -10,7 +10,7 @@
     "verify": "electron . --verify",
     "verify:capture": "electron . --verify --capture-test",
     "package:mac": "npm run build:native && node scripts/prepare-runtime.cjs && electron-builder --mac dmg --arm64 --publish never",
-    "test": "node --test test/unit.test.cjs",
+    "test": "node --test test/unit.test.cjs test/buddy.test.cjs",
     "package:win": "node scripts/prepare-runtime.cjs && electron-builder --win nsis --x64 --publish never",
     "verify:interview": "electron . --verify --interview-test"
   },
@@ -75,7 +75,8 @@
           "to": "bin",
           "filter": [
             "capture-sck",
-            "audio-sck"
+            "audio-sck",
+            "notch-info"
           ]
         }
       ],

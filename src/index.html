@@ -46,8 +46,10 @@
         Screening</span
       >
       <div class="titlebar-actions">
-        <span id="workspace-protection"></span>
-        <span class="version">0.4.0</span
+        <button id="buddy-chip" class="buddy-chip" type="button" aria-pressed="true"
+          ><span class="chip-orb" aria-hidden="true"></span>Buddy</button
+        ><span id="workspace-protection"></span>
+        <span class="version">0.5.0</span
         ><button class="text-button" data-action="hide-all" data-i18n="hideAll">
           Скрыть оба окна
         </button>
@@ -387,6 +389,13 @@
                 checked /></label
             ><label class="setting-row"
               ><span
+                ><strong data-i18n="buddySetting">Buddy у выреза экрана</strong>
+                <p>
+                  <span data-i18n="buddySettingHint"></span> ⌘ / Ctrl ⇧ B
+                </p></span
+              ><input id="buddy" type="checkbox" role="switch" checked /></label
+            ><label class="setting-row"
+              ><span
                 ><strong data-i18n="hideDock"
                   >Скрывать значок Dock</strong
                 ></span
@@ -442,6 +451,7 @@
             <option value="workspace" data-i18n="workspaceWindow">
               Большое окно
             </option>
+            <option value="buddy" data-i18n="buddyWindow">Buddy у выреза</option>
           </select>
           <div class="comparison">
             <figure>

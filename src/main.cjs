@@ -17,6 +17,7 @@ const assert = require("node:assert/strict");
 const os = require("node:os");
 const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
+const notchGeometry = require("./services/notch.cjs");
 
 app.setName("Screening");
 // Preserve the 0.2.0 settings and model cache when upgrading to the new product name.
@@ -34,6 +35,8 @@ if (verification)
   );
 let lab,
   overlay,
+  buddy,
+  buddyLayout = null,
   interview,
   quitting = false,
   busy = false;
@@ -44,6 +47,7 @@ const state = {
   hideDock: false,
   clickThrough: false,
   visible: true,
+  allHidden: false,
   capturePath: "electron",
   captureWindow: "overlay",
   notes: "",
@@ -63,26 +67,70 @@ const permission = () =>
     : "not-required";
 const snapshot = () => ({
   ...state,
+  buddy: {
+    enabled: interview?.state.settings.buddy !== false,
+    layout: buddyLayout,
+  },
   interview: interview?.state,
   audioControl,
   permission: permission(),
   supported: ["darwin", "win32"].includes(process.platform),
 });
+const windows = () =>
+  [lab, overlay, buddy].filter((win) => win && !win.isDestroyed());
 function publish() {
-  for (const win of [lab, overlay])
-    if (win && !win.isDestroyed())
-      win.webContents.send("lab:update", snapshot());
+  const value = snapshot();
+  for (const win of windows()) win.webContents.send("lab:update", value);
+  syncBuddy();
+}
+function helperPath(name) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "bin", name)
+    : path.join(__dirname, "..", "bin", name);
+}
+// Buddy follows its own switch, hides with "Hide both windows", and steps aside
+// during capture experiments unless it is the window under test.
+function buddyShouldShow() {
+  if (state.testing) return state.testWindow === "buddy";
+  return interview?.state.settings.buddy !== false && !state.allHidden;
+}
+function syncBuddy() {
+  if (!buddy || buddy.isDestroyed()) return;
+  const show = buddyShouldShow();
+  if (show && !buddy.isVisible()) buddy.showInactive();
+  else if (!show && buddy.isVisible()) {
+    buddy.hide();
+    // Return with clicks passing through, whatever the pointer was doing.
+    buddy.setIgnoreMouseEvents(true, { forward: true });
+  }
+}
+async function setBuddy(enabled) {
+  if (enabled) state.allHidden = false;
+  await interview.request("setting", { key: "buddy", value: enabled });
+  publish();
+}
+async function placeBuddy() {
+  const display = screen.getPrimaryDisplay();
+  const notch = await notchGeometry.detectNotch({
+    display,
+    helper: process.platform === "darwin" ? helperPath("notch-info") : null,
+    run: execFile,
+  });
+  const placed = notchGeometry.islandLayout({ display, notch });
+  buddyLayout = placed.layout;
+  if (buddy && !buddy.isDestroyed() && !state.testing)
+    buddy.setBounds(placed.window);
+  return placed.window;
 }
 function publishAudioLevel(value) {
   if (!Number.isFinite(value)) return;
   const level = Math.max(0, Math.min(1, value));
   audioControl.peak = Math.max(audioControl.peak, level);
-  for (const win of [lab, overlay])
-    if (win && !win.isDestroyed())
-      win.webContents.send("audio:level-update", level);
+  for (const win of windows()) win.webContents.send("audio:level-update", level);
 }
 function reveal() {
   state.visible = true;
+  state.allHidden = false;
   state.clickThrough = false;
   overlay.setIgnoreMouseEvents(false);
   overlay.show();
@@ -90,7 +138,7 @@ function reveal() {
   publish();
 }
 function apply() {
-  for (const win of [lab, overlay]) win?.setContentProtection(state.protection);
+  for (const win of windows()) win.setContentProtection(state.protection);
   overlay.setIgnoreMouseEvents(state.clickThrough, { forward: true });
   state.visible ? overlay.showInactive() : overlay.hide();
   if (process.platform === "darwin" && app.dock)
@@ -100,7 +148,7 @@ function apply() {
 function change(key, value) {
   if (busy) throw new Error("Wait for the capture experiment to finish.");
   if (key === "captureWindow") {
-    if (!["overlay", "workspace"].includes(value))
+    if (!["overlay", "workspace", "buddy"].includes(value))
       throw new Error("Unsupported test window.");
   } else if (key === "capturePath") {
     if (!["electron", "sck"].includes(value))
@@ -124,6 +172,7 @@ function change(key, value) {
     );
   }
   state[key] = value;
+  if (key === "visible" && value) state.allHidden = false;
   if (key === "capturePath") state.result = null;
   if (key === "notes") publish();
   else apply();
@@ -237,7 +286,12 @@ async function runCapture(targetName = state.captureWindow) {
     publish();
     return state.result;
   }
-  const target = targetName === "workspace" ? lab : overlay;
+  const target =
+    targetName === "workspace"
+      ? lab
+      : targetName === "buddy"
+        ? buddy
+        : overlay;
   const saved = {
     bounds: target.getBounds(),
     protection: state.protection,
@@ -254,7 +308,7 @@ async function runCapture(targetName = state.captureWindow) {
   try {
     const display = screen.getDisplayMatching(lab.getBounds()),
       area = display.workArea;
-    if (targetName === "workspace") overlay.hide();
+    if (targetName !== "overlay") overlay.hide();
     const width = targetName === "workspace" ? Math.min(1100, area.width) : 470;
     const height =
       targetName === "workspace" ? Math.min(740, area.height) : 520;
@@ -330,6 +384,7 @@ async function runCapture(targetName = state.captureWindow) {
     busy = false;
     apply();
     if (!saved.labVisible) lab.hide();
+    if (target === buddy) buddy.setIgnoreMouseEvents(true, { forward: true });
   }
 }
 async function action(name) {
@@ -346,6 +401,7 @@ async function action(name) {
     lab.hide();
     overlay.hide();
     state.visible = false;
+    state.allHidden = true;
     publish();
     return;
   }
@@ -375,6 +431,180 @@ async function action(name) {
   }
   throw new Error("Unsupported action.");
 }
+// Synthetic scenes only: shared state is patched for one screenshot, then restored.
+async function buddyScene(name, patch, probe, before = "") {
+  const whisper = interview.state.whisper,
+    ai = interview.state.ai;
+  const saved = {
+    ready: whisper.ready,
+    connected: ai.connected,
+    messages: interview.state.messages,
+    transcript: interview.state.transcript,
+    recording: interview.state.recording,
+    startedAt: interview.state.startedAt,
+  };
+  whisper.ready = true;
+  ai.connected = true;
+  Object.assign(interview.state, patch);
+  publish();
+  await delay(250);
+  if (before) await buddy.webContents.executeJavaScript(before);
+  for (let i = 0; i < 6; i++) {
+    if (interview.state.recording)
+      buddy.webContents.send("audio:level-update", 0.35 + (i % 3) * 0.2);
+    await delay(150);
+  }
+  try {
+    const result = await buddy.webContents.executeJavaScript(probe);
+    await fs.writeFile(
+      path.join(artifactDir, `buddy-${name}.png`),
+      (await buddy.webContents.capturePage()).toPNG(),
+    );
+    return result;
+  } finally {
+    whisper.ready = saved.ready;
+    ai.connected = saved.connected;
+    const { ready, connected, ...rest } = saved;
+    Object.assign(interview.state, rest);
+    publish();
+    await delay(400);
+  }
+}
+async function verifyBuddy(check) {
+  check("Buddy is protected, floating and never takes focus", () => {
+    assert.equal(buddy.isContentProtected(), true);
+    assert.equal(buddy.isAlwaysOnTop(), true);
+    assert.equal(buddy.isFocusable(), false);
+    if (process.platform === "darwin")
+      assert.equal(buddy.isHiddenInMissionControl(), true);
+  });
+  check("Buddy sits on the notch band of the primary display", () => {
+    const display = screen.getPrimaryDisplay();
+    const bounds = buddy.getBounds();
+    assert.equal(bounds.y, display.bounds.y);
+    const notchCenter =
+      bounds.x + buddyLayout.notchLeft + buddyLayout.notchWidth / 2;
+    const displayCenter = display.bounds.x + display.bounds.width / 2;
+    assert.ok(Math.abs(notchCenter - displayCenter) <= 2);
+  });
+  check("Buddy is visible by default", () =>
+    assert.equal(buddy.isVisible(), true),
+  );
+  await interview.request("setting", { key: "buddy", value: false });
+  await delay(200);
+  check("Buddy switch hides the island", () =>
+    assert.equal(buddy.isVisible(), false),
+  );
+  await interview.request("setting", { key: "buddy", value: true });
+  await delay(200);
+  check("Buddy switch restores the island", () =>
+    assert.equal(buddy.isVisible(), true),
+  );
+  await action("hide-all");
+  check("Hide both windows also hides Buddy", () =>
+    assert.equal(buddy.isVisible(), false),
+  );
+  reveal();
+  lab.show();
+  await delay(200);
+  check("Recovering the windows brings Buddy back", () =>
+    assert.equal(buddy.isVisible(), true),
+  );
+  const probe = `(() => { const island = document.getElementById("island");
+    return { mode: island.dataset.mode, open: island.classList.contains("open"),
+      text: document.getElementById("answer").textContent,
+      label: document.getElementById("label").textContent,
+      manual: island.dataset.hover === "true" || island.dataset.pinned === "true" }; })()`;
+  const question = "Tell me about a time you disagreed with your manager.";
+  const idle = await buddyScene(
+    "idle",
+    { messages: [], transcript: [], recording: false },
+    probe,
+  );
+  // The real pointer may rest on the island; only automatic opening is checked.
+  check("Idle Buddy stays collapsed at the notch", () => {
+    assert.equal(idle.mode, "idle");
+    assert.equal(idle.open, idle.manual);
+  });
+  const pinned = await buddyScene(
+    "idle-open",
+    { messages: [], transcript: [], recording: false },
+    probe,
+    `document.getElementById("orb").click()`,
+  );
+  await buddy.webContents.executeJavaScript(
+    `document.getElementById("orb").click()`,
+  );
+  check("Clicking the orb pins the panel open", () => {
+    assert.equal(pinned.mode, "idle");
+    assert.equal(pinned.open, true);
+  });
+  const thinking = await buddyScene(
+    "thinking",
+    {
+      transcript: [],
+      recording: false,
+      messages: [
+        { id: 8001, role: "user", text: question },
+        { id: 8002, role: "assistant", status: "pending", text: "" },
+      ],
+    },
+    probe,
+  );
+  check("A requested answer opens Buddy while it thinks", () => {
+    assert.equal(thinking.mode, "thinking");
+    assert.equal(thinking.open, true);
+  });
+  const listening = await buddyScene(
+    "listening",
+    {
+      messages: [],
+      recording: true,
+      startedAt: Date.now() - 83000,
+      transcript: [{ id: 1, text: question, time: new Date().toISOString() }],
+    },
+    probe,
+  );
+  check("Recording turns Buddy into a listening island", () => {
+    assert.equal(listening.mode, "listening");
+    assert.equal(listening.open, listening.manual);
+  });
+  const answer = await buddyScene(
+    "answer",
+    {
+      recording: true,
+      startedAt: Date.now() - 151000,
+      transcript: [{ id: 1, text: question, time: new Date().toISOString() }],
+      messages: [
+        { id: 9001, role: "user", text: question },
+        {
+          id: 9002,
+          role: "assistant",
+          status: "done",
+          text:
+            "**Situation.** My manager wanted Kafka for order events. I thought it was more than we needed.\n\n" +
+            "**What I did.** I ran both Kafka and SQS against our real load, about 2,000 events a minute, and showed that SQS met the latency target at a third of the cost.\n\n" +
+            "**Result.** We shipped on SQS in two weeks. I wrote down when a move to Kafka would make sense, in case volume grows tenfold.",
+        },
+      ],
+    },
+    probe,
+  );
+  check("A new answer opens Buddy's reading panel", () => {
+    assert.equal(answer.mode, "answer");
+    assert.equal(answer.open, true);
+    assert.match(answer.text, /SQS/);
+  });
+  const after = await buddy.webContents.executeJavaScript(probe);
+  check("Buddy closes when the answer is gone", () =>
+    assert.equal(after.open, after.manual),
+  );
+  // The synthetic recording left its duration in the shared timers.
+  for (const win of [lab, overlay])
+    await win.webContents.executeJavaScript(
+      `document.getElementById("elapsed").textContent = "00:00"`,
+    );
+}
 async function verify() {
   await fs.mkdir(artifactDir, { recursive: true });
   const checks = [];
@@ -382,9 +612,10 @@ async function verify() {
     fn();
     checks.push({ name, passed: true });
   }
-  check("Both application windows have content protection", () => {
+  check("All application windows have content protection", () => {
     assert.equal(overlay.isContentProtected(), true);
     assert.equal(lab.isContentProtected(), true);
+    assert.equal(buddy.isContentProtected(), true);
   });
   check("Overlay is floating and omitted from Mission Control", () => {
     assert.equal(overlay.isAlwaysOnTop(), true);
@@ -395,9 +626,11 @@ async function verify() {
     change("protection", false);
     assert.equal(overlay.isContentProtected(), false);
     assert.equal(lab.isContentProtected(), false);
+    assert.equal(buddy.isContentProtected(), false);
     change("protection", true);
     assert.equal(lab.isContentProtected(), true);
     assert.equal(overlay.isContentProtected(), true);
+    assert.equal(buddy.isContentProtected(), true);
   });
   check("Overlay can hide and recover", () => {
     change("visible", false);
@@ -419,7 +652,7 @@ async function verify() {
     }
   });
   check("Renderer is isolated and sandboxed", () => {
-    for (const win of [lab, overlay]) {
+    for (const win of [lab, overlay, buddy]) {
       const p = win.webContents.getLastWebPreferences();
       assert.equal(p.contextIsolation, true);
       assert.equal(p.sandbox, true);
@@ -465,6 +698,7 @@ async function verify() {
     interview.request("setting", { key: "speechLanguage", value: "invalid" }),
   );
   checks.push({ name: "Invalid interview settings rejected", passed: true });
+  await verifyBuddy(check);
   if (process.argv.includes("--interview-test")) {
     await interview.request("model");
     for (let i = 0; i < 240 && !interview.state.whisper.ready; i++) {
@@ -797,11 +1031,11 @@ async function verify() {
   }
   const captureResults = [];
   if (process.argv.includes("--capture-test")) {
-    for (const window of ["overlay", "workspace"])
+    for (const window of ["overlay", "workspace", "buddy"])
       captureResults.push(await runCapture(window));
     if (process.platform === "darwin") {
       change("capturePath", "sck");
-      for (const window of ["overlay", "workspace"])
+      for (const window of ["overlay", "workspace", "buddy"])
         captureResults.push(await runCapture(window));
     }
   }
@@ -919,6 +1153,10 @@ app
               },
             },
             { label: "Recover Overlay", click: reveal },
+            {
+              label: "Show Buddy at the Notch",
+              click: () => setBuddy(true).catch(console.error),
+            },
             { type: "separator" },
             { role: "quit" },
           ],
@@ -979,7 +1217,47 @@ app
         action("compact");
       }
     });
-    for (const win of [lab, overlay])
+    const buddyBounds = await placeBuddy();
+    buddy = create("buddy.html", {
+      title: "Screening — Buddy",
+      ...buddyBounds,
+      frame: false,
+      transparent: true,
+      backgroundColor: "#00000000",
+      hasShadow: false,
+      roundedCorners: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      // The meeting app keeps keyboard focus; clicks still reach Buddy.
+      focusable: false,
+      acceptFirstMouse: true,
+      // Frameless windows may then sit over the menu bar, next to the notch.
+      enableLargerThanScreen: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      hiddenInMissionControl: true,
+      type: process.platform === "darwin" ? "panel" : undefined,
+    });
+    buddy.setAlwaysOnTop(true, "screen-saver");
+    buddy.setIgnoreMouseEvents(true, { forward: true });
+    if (process.platform === "darwin")
+      buddy.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    buddy.on("close", (event) => {
+      if (!quitting) {
+        event.preventDefault();
+        setBuddy(false).catch(console.error);
+      }
+    });
+    for (const change of [
+      "display-metrics-changed",
+      "display-added",
+      "display-removed",
+    ])
+      screen.on(change, () => placeBuddy().then(publish).catch(console.error));
+    for (const win of [lab, overlay, buddy])
       win.webContents.on("did-finish-load", publish);
     interview = await require("./services/interview.cjs").createInterview(
       app,
@@ -990,6 +1268,7 @@ app
           new (require("./services/window-capture.cjs").WindowCapture)(() => [
             lab.getMediaSourceId(),
             overlay.getMediaSourceId(),
+            buddy.getMediaSourceId(),
           ]),
         getNotes: () => state.notes,
         onLevel: publishAudioLevel,
@@ -1030,6 +1309,15 @@ app
         },
       ],
       [
+        "buddy",
+        "CommandOrControl+Shift+B",
+        () => {
+          const shown =
+            interview.state.settings.buddy !== false && !state.allHidden;
+          setBuddy(!shown).catch(console.error);
+        },
+      ],
+      [
         "lab",
         "CommandOrControl+Shift+L",
         () => {
@@ -1044,9 +1332,9 @@ app
         accelerator,
         registered: globalShortcut.register(accelerator, handler),
       });
-    // Only our two top-level renderers can access the narrow local bridge.
+    // Only our own top-level renderers can access the narrow local bridge.
     const ownFrame = (event) =>
-      [lab, overlay].some(
+      [lab, overlay, buddy].some(
         (w) =>
           !w.isDestroyed() && event.senderFrame === w.webContents.mainFrame,
       );
@@ -1057,6 +1345,12 @@ app
     ipcMain.handle("lab:action", (event, name) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
       return action(name);
+    });
+    // Outside the island, clicks pass through to the apps below.
+    ipcMain.on("buddy:mouse", (event, inside) => {
+      if (event.senderFrame !== buddy.webContents.mainFrame || state.testing)
+        return;
+      buddy.setIgnoreMouseEvents(!inside, { forward: true });
     });
     ipcMain.on("audio:level", (event, value) => {
       if (
@@ -1124,7 +1418,7 @@ app
       return interview.audio(buffer);
     });
     await Promise.all(
-      [lab, overlay].map(
+      [lab, overlay, buddy].map(
         (win) =>
           new Promise((resolve) =>
             win.webContents.isLoading()

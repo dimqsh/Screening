@@ -1842,3 +1842,278 @@ figure {
 #workspace-protection[data-protected="false"] {
   color: #a7443e;
 }
+
+/* 0.5 refresh: one visual language with Buddy. Ids and layout are unchanged. */
+:root {
+  --ink: #17181c;
+  --muted: #5f6570;
+  --line: #e6e6e2;
+  --blue: #5b4cf0;
+  --blue-hover: #4a3bd9;
+  --accent-soft: #eeedfd;
+  --green: #1f8a5b;
+  --radius: 10px;
+  --shadow-sm: 0 1px 2px rgba(23, 24, 28, 0.06);
+  --shadow-md:
+    0 8px 28px rgba(23, 24, 28, 0.08), 0 1px 3px rgba(23, 24, 28, 0.06);
+  color: var(--ink);
+  background: #f6f6f3;
+}
+.titlebar {
+  background: #f6f6f3;
+}
+.primary {
+  background: linear-gradient(180deg, #6a5cf6 0%, #5646e8 100%);
+  border-radius: 10px;
+  box-shadow:
+    0 1px 2px rgba(23, 24, 28, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.primary:hover:enabled {
+  background: linear-gradient(180deg, #5f50f2 0%, #4a3bd9 100%);
+}
+.secondary {
+  border-radius: 10px;
+  border-color: #e2e2de;
+  box-shadow: var(--shadow-sm);
+}
+.text-button:hover,
+.composer-tool:hover {
+  color: var(--blue);
+}
+.record-toolbar .is-recording,
+.compact-record-bar .is-recording {
+  background: linear-gradient(180deg, #d4505c 0%, #b93a48 100%);
+}
+.status-dot.recording {
+  background: #d4505c;
+  box-shadow: 0 0 0 4px rgba(212, 80, 92, 0.14);
+  animation: rec-pulse 1.6s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  50% {
+    box-shadow: 0 0 0 7px rgba(212, 80, 92, 0.05);
+  }
+}
+#audio-level::-webkit-meter-bar {
+  background: #ebeaf2;
+}
+#audio-level::-webkit-meter-optimum-value {
+  background: linear-gradient(90deg, #36d1ff, #7c5cff);
+}
+
+/* Navigation and sidebar */
+.nav {
+  border-radius: 9px;
+  color: #6a6f79;
+}
+.nav:hover {
+  background: #ecebe7;
+}
+.nav.active {
+  background: var(--accent-soft);
+  color: var(--blue);
+}
+.new-chat {
+  border-radius: 10px;
+  border-color: #e2e2de;
+  box-shadow: var(--shadow-sm);
+}
+.new-chat:hover {
+  border-color: #c9c3f7;
+}
+.model-button {
+  border-radius: 9px;
+}
+
+/* Conversation */
+.conversation-grid {
+  border-radius: 14px;
+  border-color: #e7e7e3;
+  box-shadow: var(--shadow-sm);
+}
+.chat-message.user {
+  background: var(--accent-soft);
+  border-color: transparent;
+  border-radius: 14px;
+}
+.question-composer {
+  border-radius: 14px;
+  border: 1px solid #e3e3ea;
+  background: #fff;
+  box-shadow: var(--shadow-md);
+}
+.question-composer:focus-within {
+  border-color: #b9b1fb;
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 4px rgba(91, 76, 240, 0.1);
+}
+.setting-row input[role="switch"]:checked {
+  background: var(--blue);
+}
+
+/* Protection status reads as a pill with a dot. */
+#overlay-status,
+#workspace-protection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 560;
+  color: #17734f;
+  background: #e7f6ef;
+}
+#overlay-status::before,
+#workspace-protection::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+#overlay-status[data-protected="false"],
+#workspace-protection[data-protected="false"] {
+  color: #a3283a;
+  background: #fcebee;
+}
+#overlay-status:empty,
+#workspace-protection:empty {
+  display: none;
+}
+
+/* Buddy chip: a small orb that turns the notch island on and off. */
+.buddy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #f5f6f8;
+  background: #111114;
+  box-shadow:
+    0 2px 8px rgba(17, 17, 20, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  -webkit-app-region: no-drag;
+}
+.buddy-chip:hover {
+  background: #1d1d22;
+}
+.buddy-chip[aria-pressed="false"] {
+  color: #5f6570;
+  background: #ecebe7;
+  box-shadow: none;
+}
+.chip-orb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle at 34% 30%,
+      rgba(255, 255, 255, 0.95) 0 10%,
+      transparent 45%
+    ),
+    conic-gradient(#7c5cff, #36d1ff, #5cf0b8, #7c5cff);
+  box-shadow: 0 0 6px rgba(124, 92, 255, 0.7);
+}
+.buddy-chip[aria-pressed="false"] .chip-orb {
+  filter: grayscale(1);
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+/* Compact window */
+.overlay {
+  border-color: #e3e3df;
+}
+.overlay-header {
+  background: #fbfbf9;
+  border-bottom-color: #eeeeea;
+}
+.overlay-brand small {
+  font-size: 10px;
+  margin-left: 4px;
+}
+.overlay-header .overlay-window-actions {
+  gap: 4px;
+}
+.overlay-header .overlay-window-actions .buddy-chip,
+.titlebar-actions .buddy-chip {
+  height: 24px;
+  min-width: 0;
+  margin-right: 4px;
+  padding: 0 10px 0 8px;
+  font-size: 10.5px;
+  color: #f5f6f8;
+}
+.overlay-header .overlay-window-actions .buddy-chip[aria-pressed="false"],
+.titlebar-actions .buddy-chip[aria-pressed="false"] {
+  color: #5f6570;
+}
+.compact-record-bar select {
+  background: #f1f1f4;
+  border-radius: 10px;
+}
+.compact-record-bar .primary {
+  border-radius: 10px;
+}
+.compact-setup {
+  background: #f6f5fe;
+  border-color: #e6e3fb;
+  border-radius: 12px;
+}
+.overlay-tabs {
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom-color: #efefec;
+}
+.overlay-tabs .tab {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 999px;
+  color: #5f6570;
+}
+.overlay-tabs .tab:hover {
+  background: #f1f1ef;
+}
+.overlay-tabs .tab.active {
+  background: var(--accent-soft);
+  color: var(--blue);
+  font-weight: 600;
+}
+.overlay .question-composer {
+  border-color: #e3e3ea;
+  border-radius: 14px;
+  margin: 2px 12px 0;
+}
+.overlay .chat-message.user {
+  border-radius: 12px;
+}
+.compact-settings {
+  border-radius: 16px;
+  border-color: #e3e3df;
+  box-shadow: 0 24px 70px rgba(23, 24, 28, 0.22);
+}
+.compact-settings::backdrop,
+.window-dialog::backdrop,
+.image-dialog::backdrop {
+  background: rgba(23, 24, 28, 0.32);
+  backdrop-filter: blur(3px);
+}
+.window-dialog,
+.image-dialog {
+  border-radius: 16px;
+}
+.window-option {
+  border-radius: 10px;
+}
+.window-option:hover {
+  background: var(--accent-soft);
+}

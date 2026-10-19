@@ -19,17 +19,28 @@
         <path d="M9 4h6l-1 5 4 4H6l4-4-1-5Z" />
         <path d="M12 13v7" />
       </symbol>
-      <symbol id="b-close" viewBox="0 0 24 24">
-        <path d="m6 6 12 12M18 6 6 18" />
-      </symbol>
+      <symbol id="b-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
       <symbol id="b-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" /></symbol>
       <symbol id="b-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" /></symbol>
       <symbol id="b-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></symbol>
+      <symbol id="b-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="b-home" viewBox="0 0 24 24">
+        <path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1v-8.5Z" />
+      </symbol>
+      <symbol id="b-chat" viewBox="0 0 24 24">
+        <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H10l-4.5 3.5V17H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" />
+      </symbol>
+      <symbol id="b-note" viewBox="0 0 24 24">
+        <path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+        <path d="M14 3v5h5M9 13h6M9 17h4" />
+      </symbol>
+      <symbol id="b-person" viewBox="0 0 24 24">
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
+      </symbol>
       <symbol id="b-window" viewBox="0 0 24 24">
         <rect x="3" y="4" width="18" height="16" rx="2.5" />
         <path d="M3 9h18" />
-        <circle cx="6.5" cy="6.5" r=".6" />
-        <circle cx="9" cy="6.5" r=".6" />
       </symbol>
       <symbol id="b-paste" viewBox="0 0 24 24">
         <rect x="5" y="4" width="14" height="17" rx="2.5" />
@@ -37,6 +48,19 @@
       </symbol>
       <symbol id="b-spark" viewBox="0 0 24 24">
         <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" />
+      </symbol>
+      <symbol id="b-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" /></symbol>
+      <symbol id="b-mic" viewBox="0 0 24 24">
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+      </symbol>
+      <symbol id="b-ear" viewBox="0 0 24 24">
+        <path d="M7 9a5 5 0 1 1 10 0c0 3-3 4-3 7a3 3 0 0 1-6 0" />
+        <path d="M10 9a2 2 0 1 1 4 0" />
+      </symbol>
+      <symbol id="b-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" /></symbol>
+      <symbol id="b-shield" viewBox="0 0 24 24">
+        <path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6l-7-3Z" />
       </symbol>
       <symbol id="b-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></symbol>
     </svg>
@@ -48,8 +72,11 @@
       <div class="body">
         <div class="bar">
           <div class="wing wing-left">
-            <button id="orb" class="orb-button" type="button" aria-pressed="false">
-              <span class="orb" aria-hidden="true"></span>
+            <button id="orb" class="face-button" type="button" aria-pressed="false">
+              <span class="face face-mini" data-mood="idle" aria-hidden="true">
+                <span class="halo"></span>
+                <span class="head"><span class="eyes"><i class="eye"></i><i class="eye"></i></span></span>
+              </span>
             </button>
             <span id="label" class="label" role="status"></span>
           </div>
@@ -64,43 +91,85 @@
         </div>
 
         <section id="panel" class="panel">
-          <header class="head">
-            <div class="status">
-              <span id="title" class="title"></span>
-              <span id="meta" class="meta"></span>
-            </div>
-            <div class="controls">
-              <div id="source" class="segmented" role="radiogroup" aria-label="Audio source">
-                <button class="seg" type="button" role="radio" data-source="system">Call audio</button
-                ><button class="seg" type="button" role="radio" data-source="microphone">Microphone</button>
-              </div>
-              <button id="listen" class="listen" type="button">
-                <span class="listen-dot" aria-hidden="true"></span><span id="listen-label">Listen</span>
+          <header class="topbar">
+            <nav id="tabs" class="icon-tabs" role="tablist" aria-label="Buddy">
+              <button class="tab" type="button" role="tab" data-tab="answer" title="Answer" aria-label="Answer">
+                <svg><use href="#b-home" /></svg></button
+              ><button class="tab" type="button" role="tab" data-tab="transcript" title="Transcript" aria-label="Transcript">
+                <svg><use href="#b-chat" /></svg></button
+              ><button class="tab" type="button" role="tab" data-tab="notes" title="Notes" aria-label="Notes">
+                <svg><use href="#b-note" /></svg></button
+              ><button class="tab" type="button" role="tab" data-tab="you" title="You" aria-label="You">
+                <svg><use href="#b-person" /></svg>
               </button>
-              <button id="pin" class="tool" type="button" aria-pressed="false">
-                <svg><use href="#b-pin" /></svg>
-              </button>
-              <button id="dismiss" class="tool" type="button">
+            </nav>
+            <span class="glance-face face face-tiny" data-mood="happy" aria-hidden="true">
+              <span class="halo"></span>
+              <span class="head"><span class="eyes"><i class="eye"></i><i class="eye"></i></span></span>
+              <span class="dots"><i></i><i></i><i></i></span>
+            </span>
+            <span id="title" class="title"></span>
+            <span id="meta" class="meta"></span>
+            <div class="status-icons">
+              <span id="protection" class="status-icon" role="img"><svg><use href="#b-shield" /></svg></span>
+              <button id="new-session" class="tool" type="button" title="New session" aria-label="New session">
+                <svg><use href="#b-plus" /></svg></button
+              ><button id="pin" class="tool" type="button" aria-pressed="false">
+                <svg><use href="#b-pin" /></svg></button
+              ><button id="dismiss" class="tool" type="button">
                 <svg><use href="#b-close" /></svg>
               </button>
             </div>
           </header>
 
-          <nav id="tabs" class="tabs" role="tablist" aria-label="Buddy">
-            <button class="tab" type="button" role="tab" data-tab="answer">Answer</button
-            ><button class="tab" type="button" role="tab" data-tab="transcript">Transcript</button
-            ><button class="tab" type="button" role="tab" data-tab="notes">Notes</button
-            ><button class="tab" type="button" role="tab" data-tab="you">You</button>
-            <button id="new-session" class="link" type="button">New session</button>
-          </nav>
+          <section id="hero" class="hero">
+            <div class="card buddy-card">
+              <span id="face" class="face face-big" data-mood="idle" aria-hidden="true">
+                <span class="halo"></span>
+                <span class="head"><span class="eyes"><i class="eye"></i><i class="eye"></i></span></span>
+                <span class="dots"><i></i><i></i><i></i></span>
+              </span>
+              <ol id="activity" class="activity">
+                <li data-step="listen"><svg><use href="#b-wave" /></svg><span></span></li>
+                <li data-step="hear"><svg><use href="#b-ear" /></svg><span></span></li>
+                <li data-step="answer"><svg><use href="#b-spark" /></svg><span></span></li>
+              </ol>
+            </div>
+            <div class="card chips">
+              <button class="chip teal" type="button" data-source="system">
+                <span class="chip-icon"><svg class="when-idle"><use href="#b-wave" /></svg><svg class="when-live"><use href="#b-stop" /></svg></span
+                ><span class="chip-label">Call audio</span>
+              </button>
+              <button class="chip violet" type="button" data-source="microphone">
+                <span class="chip-icon"><svg class="when-idle"><use href="#b-mic" /></svg><svg class="when-live"><use href="#b-stop" /></svg></span
+                ><span class="chip-label">Microphone</span>
+              </button>
+              <button id="answer-now" class="chip amber" type="button" title="Answer what was just said">
+                <span class="chip-icon"><svg><use href="#b-spark" /></svg></span
+                ><span class="chip-label">Answer</span>
+              </button>
+              <button id="snapshot" class="chip coral" type="button">
+                <span class="chip-icon"><svg><use href="#b-window" /></svg></span
+                ><span class="chip-label">Snapshot</span>
+              </button>
+            </div>
+          </section>
 
           <div class="views">
             <section id="view-setup" class="view">
-              <h2 class="setup-title">Let’s get you ready</h2>
-              <p class="setup-lead">
-                Two one-time steps. Then Buddy listens to the call and answers
-                right under your camera.
-              </p>
+              <div class="setup-hero">
+                <span class="face face-big" data-mood="sleepy" aria-hidden="true">
+                  <span class="halo"></span>
+                  <span class="head"><span class="eyes"><i class="eye"></i><i class="eye"></i></span></span>
+                </span>
+                <div>
+                  <h2 class="setup-title">Hi, I’m Buddy</h2>
+                  <p class="setup-lead">
+                    Two one-time steps, then I listen to the call and answer
+                    right under your camera.
+                  </p>
+                </div>
+              </div>
               <ol class="steps">
                 <li id="step-model" class="step">
                   <span class="step-mark"><span>1</span><svg><use href="#b-check" /></svg></span>
@@ -148,12 +217,7 @@
 
             <section id="view-transcript" class="view">
               <div id="transcript" class="transcript"></div>
-              <footer class="view-foot">
-                <span class="hint">New lines arrive about every 8 seconds.</span>
-                <button id="answer-now" class="action primary" type="button">
-                  <svg><use href="#b-spark" /></svg>Answer what was just said
-                </button>
-              </footer>
+              <p class="hint view-hint">New lines arrive about every 8 seconds.</p>
             </section>
 
             <section id="view-notes" class="view">
@@ -216,9 +280,7 @@
                 aria-label="Ask Buddy"
                 placeholder="Ask anything, or paste a coding task…"
               ></textarea>
-              <button id="snapshot" class="tool" type="button" title="Snapshot a window" aria-label="Snapshot a window">
-                <svg><use href="#b-window" /></svg></button
-              ><button id="paste" class="tool" type="button" title="Paste" aria-label="Paste">
+              <button id="paste" class="tool" type="button" title="Paste" aria-label="Paste">
                 <svg><use href="#b-paste" /></svg></button
               ><button id="send" class="send" type="submit" title="Send" aria-label="Send">
                 <svg><use href="#b-up" /></svg>

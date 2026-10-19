@@ -12,19 +12,20 @@ There are no other windows. A small island icon in the menu bar is the way in.
 2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with two setup steps.
 3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
 4. **Sign in with ChatGPT.** The bundled official Codex CLI opens your browser. Your ChatGPT plan, model access and limits apply. This does not turn a ChatGPT subscription into an OpenAI API key.
-5. In Buddy, pick **Call audio** for the interviewer’s voice or **Microphone** for yours, then press **Listen**. Allow the audio and screen permissions macOS or Windows asks for.
+5. In Buddy, press **Call audio** to listen to the interviewer, or **Microphone** to listen to yourself. Press it again, now labeled **Stop**, to stop. Allow the audio and screen permissions macOS or Windows asks for.
 6. When the interviewer finishes a question, press Cmd/Ctrl+Shift+Enter. Buddy opens and streams the answer under your camera.
 
 ## Buddy
 
-- **Collapsed**, Buddy is a small orb next to the notch with a green dot that means screen-sharing protection is on. While listening, it shows a waveform that follows the voice and a timer.
+- **Buddy is a character**: a small round face with two eyes. It sleeps until setup is done, looks up and shows a "•••" badge while it thinks, reads along while an answer streams, smiles when the answer is ready, and looks worried if something fails. It blinks now and then, and its eyes follow your pointer.
+- **Collapsed**, Buddy sits next to the notch with a green dot that means screen-sharing protection is on. While listening, it shows a waveform that follows the voice and a timer.
 - **When an answer arrives**, Buddy opens a quiet reading view: the question and the answer in large type, nothing else. It closes a minute after the answer finishes.
-- **Hover** to open the full island; click the orb to keep it open. The full island has the listening controls and four tabs:
+- **Hover** to open the full island; click Buddy’s face to keep it open. The full island has icon tabs at the top, a card with Buddy and three steps (listen, hear, answer) with the current one lit, four chips (**Call audio**, **Microphone**, **Answer**, **Snapshot**), and four tabs:
   - **Answer**: the latest answer, earlier answers with the arrows, Copy, and a box to type or paste a question.
   - **Transcript**: what was heard, with times, and **Answer what was just said**.
   - **Notes**: talking points. Turn on **Use notes in answers** to send them with your questions.
   - **You**: your target role, skills and real wins. Buddy uses only what you write here and never makes up achievements.
-- **Snapshot a window** from the question box to send a coding task or a diagram. Buddy takes one image, shows it in the box, and sends it with your next message.
+- **Snapshot** a window to send a coding task or a diagram. Buddy takes one image, shows it in the box, and sends it with your next message.
 - Buddy never takes the keyboard on its own, so Zoom, Meet or Teams keeps it. Buddy takes the keyboard only while you type in one of its fields, and gives it back when you send, press Escape or click elsewhere. Outside the island, clicks pass through to the apps below.
 - On Windows, and on Macs without a notch, Buddy hangs from the top edge as a small pill.
 
@@ -93,7 +94,7 @@ The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.h
 
 `npm run verify` checks that Buddy is the only visible window, the engine stays hidden, there is no Dock icon, the menu-bar icon exists, and protection, focus hand-off, notch placement, notes, background, paste and English text all work. It saves screenshots of Buddy’s states in `validation/` using synthetic data; no account request is made.
 
-To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Listen button and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
+To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
 
 The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test --audio-test` on the installed app. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 

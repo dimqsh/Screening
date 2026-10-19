@@ -1,12 +1,14 @@
 // Buddy: the whole app, driven by the shared interview snapshot.
 const api = window.captureLab;
-const { deriveBuddy, listTurns } = window.buddyModel;
+const { deriveBuddy, listTurns, buddyMood, buddyActivity } = window.buddyModel;
 const $ = (id) => document.getElementById(id);
 const island = $("island");
 const panel = $("panel");
 const reading = $("answer");
 const input = $("question-input");
 const bars = [...document.querySelectorAll("#wave i")];
+const faces = [...document.querySelectorAll(".face")];
+const CHIP_LABELS = { system: "Call audio", microphone: "Microphone" };
 const FIELDS = "#question-input, #notes, #context";
 const BAR_GAIN = [0.5, 0.82, 1, 0.74, 0.46];
 const HOVER_OPEN_MS = 220;
@@ -273,7 +275,7 @@ function renderTranscript() {
     empty.className = "empty-text";
     empty.textContent = current.interview.recording
       ? "Listening. The first line appears in a few seconds."
-      : "Nothing heard yet. Press Listen to transcribe the call.";
+      : "Nothing heard yet. Press Call audio or Microphone to start.";
     target.replaceChildren(empty);
     return;
   }
@@ -387,38 +389,53 @@ function render(snapshot) {
   prop($("dismiss"), "title", "Close");
   attr($("dismiss"), "aria-label", "Close");
 
-  // Listening controls
   const settings = interview.settings;
-  const audioBusy = Boolean(snapshot.audioControl?.busy);
-  if (pickedSource === settings.source) pickedSource = null;
-  const source = interview.recording
-    ? interview.source
-    : pickedSource || settings.source;
-  for (const seg of document.querySelectorAll("[data-source]")) {
-    attr(seg, "aria-checked", String(seg.dataset.source === source));
-    prop(seg, "disabled", Boolean(interview.recording || audioBusy));
+  // Buddy's face and what it is doing
+  const mood = buddyMood(view);
+  for (const face of faces)
+    if (!face.closest(".setup-hero")) attr(face, "data-mood", mood);
+  for (const row of buddyActivity(view)) {
+    const item = document.querySelector(`#activity [data-step="${row.key}"]`);
+    item.classList.toggle("active", row.active);
+    setText(item.querySelector("span"), row.text);
   }
-  const listen = $("listen");
-  listen.classList.toggle("on", interview.recording);
-  prop(listen, "disabled", Boolean(audioBusy || (!interview.recording && !interview.whisper.ready)));
-  setText(
-    $("listen-label"),
-    audioBusy
-      ? snapshot.audioControl.phase === "stopping"
-        ? "Finishing…"
-        : "Starting…"
-      : interview.recording
-        ? "Stop"
-        : "Listen",
-  );
-  show($("source"), mode !== "setup");
-  show(listen, mode !== "setup");
+
+  // Listening chips: each starts its own source; the live one stops it.
+  const audioBusy = Boolean(snapshot.audioControl?.busy);
+  for (const chip of document.querySelectorAll("[data-source]")) {
+    const live = interview.recording && interview.source === chip.dataset.source;
+    chip.classList.toggle("live", live);
+    prop(
+      chip,
+      "disabled",
+      Boolean(
+        audioBusy ||
+          !interview.whisper.ready ||
+          (interview.recording && !live),
+      ),
+    );
+    setText(
+      chip.querySelector(".chip-label"),
+      live
+        ? audioBusy
+          ? "Finishing…"
+          : "Stop"
+        : audioBusy && chip.dataset.source === interview.settings.source
+          ? "Starting…"
+          : CHIP_LABELS[chip.dataset.source],
+    );
+  }
+  show($("hero"), mode !== "setup");
+  const protection = $("protection");
+  attr(protection, "data-protected", String(view.protection));
+  prop(protection, "title", shieldTitle);
+  attr(protection, "aria-label", shieldTitle);
 
   // Views
   const active = activeView();
   for (const section of document.querySelectorAll(".view"))
     section.classList.toggle("active", section.id === `view-${active}`);
-  show($("tabs"), active !== "setup" && active !== "picker");
+  show($("tabs"), active !== "setup");
   for (const button of document.querySelectorAll("[data-tab]"))
     attr(button, "aria-selected", String(button.dataset.tab === tab));
   prop($("new-session"), "disabled", Boolean(interview.ai.busy || !interview.messages.length));
@@ -626,29 +643,16 @@ for (const button of document.querySelectorAll("[data-tab]"))
     picking = false;
     render(current);
   });
-// The source you just picked wins over a snapshot that has not caught up yet.
-let pickedSource = null;
-for (const seg of document.querySelectorAll("[data-source]"))
-  seg.addEventListener(
+// Each chip listens to its own source, so there is no separate source switch.
+for (const chip of document.querySelectorAll("[data-source]"))
+  chip.addEventListener(
     "click",
-    safe(async () => {
-      pickedSource = seg.dataset.source;
-      for (const other of document.querySelectorAll("[data-source]"))
-        other.setAttribute("aria-checked", String(other === seg));
-      await api.request("setting", { key: "source", value: pickedSource });
-    }),
+    safe(() =>
+      current.interview.recording
+        ? api.request("audio-stop")
+        : api.request("audio-start", chip.dataset.source),
+    ),
   );
-$("listen").addEventListener(
-  "click",
-  safe(() =>
-    current.interview.recording
-      ? api.request("audio-stop")
-      : api.request(
-          "audio-start",
-          pickedSource || current.interview.settings.source,
-        ),
-  ),
-);
 $("model").addEventListener(
   "click",
   safe(() => api.request("model")),
@@ -819,6 +823,41 @@ $("remove-attachment").addEventListener(
   "click",
   safe(() => api.request("remove-attachment")),
 );
+
+// Buddy blinks now and then. Each blink is one short transform.
+function blink() {
+  if (!document.hidden && current)
+    for (const face of faces) face.classList.add("blink");
+  setTimeout(() => faces.forEach((face) => face.classList.remove("blink")), 140);
+  setTimeout(blink, 3200 + Math.random() * 3800);
+}
+setTimeout(blink, 2500);
+
+// While the pointer is on Buddy, its eyes look toward it.
+const LOOKING = new Set(["idle", "listening", "happy"]);
+let lookFrame = 0;
+function look(event) {
+  if (lookFrame) return;
+  lookFrame = requestAnimationFrame(() => {
+    lookFrame = 0;
+    for (const face of faces) {
+      const box = face.getBoundingClientRect();
+      if (!event || !pointerInside || !box.width || !LOOKING.has(face.dataset.mood)) {
+        face.style.removeProperty("--look-x");
+        face.style.removeProperty("--look-y");
+        continue;
+      }
+      const dx = event.clientX - (box.left + box.width / 2);
+      const dy = event.clientY - (box.top + box.height / 2);
+      const length = Math.hypot(dx, dy) || 1;
+      const reach = Math.min(1, length / 160) * 0.06;
+      face.style.setProperty("--look-x", `${((dx / length) * reach).toFixed(3)}em`);
+      face.style.setProperty("--look-y", `${((dy / length) * reach).toFixed(3)}em`);
+    }
+  });
+}
+document.addEventListener("mousemove", look);
+document.addEventListener("mouseleave", () => look(null));
 
 // Keeps the timer moving and closes the island when an answer's minute is up.
 setInterval(() => {

@@ -9,6 +9,8 @@ const {
   deriveBuddy,
   formatElapsed,
   listTurns,
+  buddyMood,
+  buddyActivity,
 } = require("../src/buddy-model.js");
 const { trayMenu, findItem } = require("../src/tray-menu.cjs");
 
@@ -554,4 +556,70 @@ test("Buddy's snapshot carries previews and names, not full images", () => {
   assert.equal(light.interview.attachment.dataUrl, undefined);
   assert.equal(value.interview.attachment.dataUrl, big);
   assert.deepEqual(engineSnapshot(value), { interview: { recording: false } });
+});
+
+test("Buddy's face follows what it is doing", () => {
+  const mood = (overrides, options) => buddyMood(deriveBuddy(snapshot(overrides), options));
+  assert.equal(mood({ buddy: { enabled: false } }), "sleepy");
+  assert.equal(mood({ interview: { whisper: { ready: false } } }), "sleepy");
+  assert.equal(mood({}), "idle");
+  assert.equal(mood({ interview: { recording: true, startedAt: 1 } }), "listening");
+  const pending = [
+    { id: 1, role: "user", text: "Q" },
+    { id: 2, role: "assistant", text: "", status: "pending" },
+  ];
+  assert.equal(mood({ interview: { messages: pending, ai: { connected: true, busy: true } } }), "thinking");
+  const streaming = [
+    { id: 1, role: "user", text: "Q" },
+    { id: 2, role: "assistant", text: "Part", status: "pending" },
+  ];
+  assert.equal(mood({ interview: { messages: streaming, ai: { connected: true, busy: true } } }), "reading");
+  const done = [
+    { id: 1, role: "user", text: "Q" },
+    { id: 2, role: "assistant", text: "All", status: "done" },
+  ];
+  assert.equal(mood({ interview: { messages: done } }), "happy");
+  const failed = [
+    { id: 1, role: "user", text: "Q" },
+    { id: 2, role: "assistant", text: "", status: "error", error: "x" },
+  ];
+  assert.equal(mood({ interview: { messages: failed } }), "worried");
+});
+test("Buddy's activity shows listen, hear and answer with the current step lit", () => {
+  const idle = buddyActivity(deriveBuddy(snapshot()));
+  assert.deepEqual(idle.map((row) => row.key), ["listen", "hear", "answer"]);
+  assert.equal(idle.find((row) => row.active).key, "listen");
+  assert.equal(idle[0].text, "Ready to listen");
+  const listening = buddyActivity(
+    deriveBuddy(
+      snapshot({
+        interview: {
+          recording: true,
+          source: "microphone",
+          startedAt: 1000,
+          transcript: [{ text: "Walk me through your last project" }],
+        },
+      }),
+      { now: 1000 + 65000 },
+    ),
+  );
+  assert.equal(listening[0].text, "Listening to your mic · 01:05");
+  assert.match(listening[1].text, /Walk me through your last project/);
+  assert.equal(listening.find((row) => row.active).key, "hear");
+  const thinking = buddyActivity(
+    deriveBuddy(
+      snapshot({
+        interview: {
+          ai: { connected: true, busy: true },
+          messages: [
+            { id: 1, role: "user", text: "Q" },
+            { id: 2, role: "assistant", text: "", status: "pending" },
+          ],
+        },
+      }),
+    ),
+  );
+  assert.equal(thinking[2].text, "Thinking…");
+  assert.equal(thinking.find((row) => row.active).key, "answer");
+  assert.equal(thinking.filter((row) => row.active).length, 1);
 });

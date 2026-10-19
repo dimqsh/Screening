@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  Tray,
   ipcMain,
   globalShortcut,
   screen,
@@ -10,129 +11,216 @@ const {
   session,
   nativeImage,
   clipboard,
+  dialog,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const assert = require("node:assert/strict");
 const os = require("node:os");
 const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
+const notchGeometry = require("./services/notch.cjs");
+const { trayMenu, KEYS } = require("./tray-menu.cjs");
+const { formatElapsed } = require("./buddy-model.js");
+const { speechModel } = require("./services/speech-model.cjs");
+const { lightSnapshot, engineSnapshot } = require("./services/snapshot.cjs");
 
 app.setName("Screening");
-// Preserve the 0.2.0 settings and model cache when upgrading to the new product name.
+// Preserve settings and the model cache from versions named Capture Lab.
 app.setPath("userData", path.join(app.getPath("appData"), "Capture Lab"));
 const verification = process.argv.includes("--verify");
 if (!verification && !app.requestSingleInstanceLock()) app.exit(0);
 const artifactDir = path.resolve(
   process.env.CAPTURE_LAB_ARTIFACTS || path.join(__dirname, "..", "validation"),
 );
-// Keep this research app's Chromium cache separate from other Electron apps.
 if (verification)
   app.setPath(
     "userData",
     path.join(os.tmpdir(), `capture-lab-test-${process.pid}`),
   );
-let lab,
-  overlay,
+
+// Buddy is the only visible window. The engine is a hidden audio host.
+let buddy,
+  engine,
+  tray,
   interview,
+  audioRouting,
+  buddyLayout = null,
+  trayKey = "",
+  trayRecording = null,
   quitting = false,
   busy = false;
-let audioRouting;
 const audioControl = { busy: false, peak: 0, phase: null };
+// Counts keyboard hand-offs so verification can check Buddy's own behavior.
+const keyboard = { taken: 0, released: 0, focusableOnTake: false };
 const state = {
   protection: true,
-  hideDock: false,
-  clickThrough: false,
-  visible: true,
-  capturePath: "electron",
-  captureWindow: "overlay",
+  hidden: false,
   notes: "",
   result: null,
   testing: false,
   testCard: false,
-  testWindow: "overlay",
+  testWindow: "buddy",
   shortcuts: [],
   platform: process.platform,
   os: `${os.type()} ${os.release()}`,
   electron: process.versions.electron,
 };
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const alive = (win) => win && !win.isDestroyed();
 const permission = () =>
   process.platform === "darwin"
     ? systemPreferences.getMediaAccessStatus("screen")
     : "not-required";
+const buddyShown = () => (state.testing ? true : !state.hidden);
 const snapshot = () => ({
   ...state,
+  buddy: { enabled: !state.hidden, layout: buddyLayout },
+  buddyVisible: !state.hidden,
+  speechModel: speechModel(interview?.state.settings.speechModel),
   interview: interview?.state,
   audioControl,
   permission: permission(),
   supported: ["darwin", "win32"].includes(process.platform),
 });
+// Each window gets only what it uses: Buddy no full images, the engine one flag.
 function publish() {
-  for (const win of [lab, overlay])
-    if (win && !win.isDestroyed())
-      win.webContents.send("lab:update", snapshot());
+  const value = snapshot();
+  if (alive(buddy)) buddy.webContents.send("lab:update", lightSnapshot(value));
+  if (alive(engine))
+    engine.webContents.send("lab:update", engineSnapshot(value));
+  syncBuddy();
+  syncTray(value);
 }
 function publishAudioLevel(value) {
   if (!Number.isFinite(value)) return;
   const level = Math.max(0, Math.min(1, value));
   audioControl.peak = Math.max(audioControl.peak, level);
-  for (const win of [lab, overlay])
-    if (win && !win.isDestroyed())
-      win.webContents.send("audio:level-update", level);
+  if (alive(buddy)) buddy.webContents.send("audio:level-update", level);
 }
-function reveal() {
-  state.visible = true;
-  state.clickThrough = false;
-  overlay.setIgnoreMouseEvents(false);
-  overlay.show();
-  overlay.focus();
+function report(error) {
+  if (interview) {
+    interview.state.error = error.message;
+    publish();
+  } else console.error(error);
+}
+const attempt = (fn) => () => Promise.resolve().then(fn).catch(report);
+
+function helperPath(name) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "bin", name)
+    : path.join(__dirname, "..", "bin", name);
+}
+function syncBuddy() {
+  if (!alive(buddy)) return;
+  const show = buddyShown();
+  if (show && !buddy.isVisible()) buddy.showInactive();
+  else if (!show && buddy.isVisible()) {
+    releaseKeyboard();
+    buddy.hide();
+    // Return with clicks passing through, whatever the pointer was doing.
+    buddy.setIgnoreMouseEvents(true, { forward: true });
+  }
+}
+async function placeBuddy() {
+  const display = screen.getPrimaryDisplay();
+  const notch = await notchGeometry.detectNotch({
+    display,
+    helper: process.platform === "darwin" ? helperPath("notch-info") : null,
+    run: execFile,
+  });
+  const placed = notchGeometry.islandLayout({ display, notch });
+  buddyLayout = placed.layout;
+  if (alive(buddy) && !state.testing) buddy.setBounds(placed.window);
+  return placed.window;
+}
+function setHidden(hidden) {
+  state.hidden = hidden;
   publish();
 }
-function apply() {
-  for (const win of [lab, overlay]) win?.setContentProtection(state.protection);
-  overlay.setIgnoreMouseEvents(state.clickThrough, { forward: true });
-  state.visible ? overlay.showInactive() : overlay.hide();
-  if (process.platform === "darwin" && app.dock)
-    state.hideDock ? app.dock.hide() : app.dock.show();
-  publish();
+function ask() {
+  setHidden(false);
+  buddy.webContents.send("buddy:ask");
 }
+// Buddy takes the keyboard only while a text field is in use. On macOS the
+// panel is non-activating, so the meeting app stays the active app.
+function takeKeyboard() {
+  if (!alive(buddy) || !buddy.isVisible()) return;
+  buddy.setFocusable(true);
+  keyboard.taken++;
+  keyboard.focusableOnTake = buddy.isFocusable();
+  buddy.focus();
+  buddy.webContents.focus();
+}
+function releaseKeyboard() {
+  if (!alive(buddy) || !buddy.isFocusable()) return;
+  keyboard.released++;
+  const focused = buddy.isFocused();
+  buddy.setFocusable(false);
+  // Hiding for a moment hands key status back to the app underneath.
+  if (focused && buddy.isVisible()) {
+    buddy.hide();
+    buddy.showInactive();
+  }
+}
+
 function change(key, value) {
-  if (busy) throw new Error("Wait for the capture experiment to finish.");
-  if (key === "captureWindow") {
-    if (!["overlay", "workspace"].includes(value))
-      throw new Error("Unsupported test window.");
-  } else if (key === "capturePath") {
-    if (!["electron", "sck"].includes(value))
-      throw new Error("Unsupported capture path.");
-  } else if (key === "notes") {
+  if (busy) throw new Error("Wait for the capture test to finish.");
+  if (key === "notes") {
     if (typeof value !== "string" || value.length > 12000)
       throw new Error("Notes must be under 12,000 characters.");
-  } else if (
-    !["protection", "hideDock", "clickThrough", "visible"].includes(key) ||
-    typeof value !== "boolean"
-  ) {
+    state.notes = value;
+    publish();
+    return lightSnapshot(snapshot());
+  }
+  if (key !== "protection" || typeof value !== "boolean")
     throw new Error("Unsupported setting.");
-  }
-  if (
-    key === "clickThrough" &&
-    value &&
-    !state.shortcuts.find((s) => s.action === "recover")?.registered
-  ) {
-    throw new Error(
-      "Click-through needs the recovery shortcut. Resolve the shortcut conflict first.",
-    );
-  }
-  state[key] = value;
-  if (key === "capturePath") state.result = null;
-  if (key === "notes") publish();
-  else apply();
-  return snapshot();
+  state.protection = value;
+  apply();
+  return lightSnapshot(snapshot());
 }
+function apply() {
+  for (const win of [buddy, engine])
+    if (alive(win)) win.setContentProtection(state.protection);
+  publish();
+}
+
+async function audio(op, kind) {
+  if (audioControl.busy)
+    throw new Error("Audio is starting or stopping. Wait a moment.");
+  if (op === "start") {
+    if (!["microphone", "system"].includes(kind))
+      throw new Error("Invalid audio source");
+    if (!interview.state.whisper.ready)
+      throw new Error("Download the speech model before listening.");
+    if (interview.state.recording) throw new Error("Already listening.");
+    audioControl.peak = 0;
+    await interview.request("setting", { key: "source", value: kind });
+  } else if (op !== "stop") throw new Error("Unknown audio operation");
+  audioControl.phase = op === "start" ? "starting" : "stopping";
+  audioControl.busy = true;
+  publish();
+  try {
+    if (op === "stop") {
+      if (process.platform === "darwin" && interview.state.source === "system")
+        await interview.request("stop");
+      else await audioRouting.command("stop");
+    } else if (process.platform === "darwin" && kind === "system")
+      await interview.request("system-start");
+    else await audioRouting.command("start", kind);
+  } finally {
+    audioControl.busy = false;
+    audioControl.phase = null;
+    publish();
+  }
+}
+const toggleListening = () =>
+  interview.state.recording
+    ? audio("stop")
+    : audio("start", interview.state.settings.source);
+
 function create(file, options) {
   const win = new BrowserWindow({
     show: false,
-    backgroundColor: "#f5f4f0",
     icon: path.join(__dirname, "..", "assets", "brand", "screening.png"),
     ...options,
     webPreferences: {
@@ -150,6 +238,8 @@ function create(file, options) {
   win.loadFile(path.join(__dirname, file));
   return win;
 }
+
+// Capture experiment: the same A/B marker test as earlier versions, for Buddy.
 function markerPixels(image) {
   const pixels = image.toBitmap();
   let count = 0;
@@ -159,19 +249,16 @@ function markerPixels(image) {
   }
   return count;
 }
-async function cropCapture(display, target = overlay) {
-  if (state.capturePath === "sck") {
+async function cropCapture(display, target, capturePath) {
+  if (capturePath === "sck") {
     if (process.platform !== "darwin")
       throw new Error("ScreenCaptureKit requires macOS.");
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), "capture-lab-roi-"));
     const filename = path.join(temp, "crop.png");
     const bounds = target.getBounds();
-    const helper = app.isPackaged
-      ? path.join(process.resourcesPath, "bin", "capture-sck")
-      : path.join(__dirname, "..", "bin", "capture-sck");
     try {
       await execFile(
-        helper,
+        helperPath("capture-sck"),
         [
           String(display.id),
           String(bounds.x - display.bounds.x),
@@ -217,13 +304,13 @@ async function cropCapture(display, target = overlay) {
     throw new Error("Test card is outside the selected screen.");
   return source.thumbnail.crop(rect);
 }
-async function runCapture(targetName = state.captureWindow) {
-  if (busy) throw new Error("A capture experiment is already running.");
+async function runCapture(capturePath = "electron") {
+  if (busy) throw new Error("A capture test is already running.");
   if (process.platform === "darwin" && permission() !== "granted") {
     state.result = {
       outcome: "permission-needed",
       detail:
-        "Enable Screen & System Audio Recording for Screening, reopen the app and retry.",
+        "Allow Screening in System Settings → Privacy & Security → Screen & System Audio Recording, then reopen the app.",
       permission: permission(),
     };
     publish();
@@ -237,44 +324,34 @@ async function runCapture(targetName = state.captureWindow) {
     publish();
     return state.result;
   }
-  const target = targetName === "workspace" ? lab : overlay;
-  const saved = {
-    bounds: target.getBounds(),
-    protection: state.protection,
-    clickThrough: state.clickThrough,
-    visible: state.visible,
-    labVisible: lab.isVisible(),
-  };
+  const saved = { bounds: buddy.getBounds(), protection: state.protection };
   busy = true;
   state.testing = true;
   state.testCard = true;
-  state.testWindow = targetName;
   state.result = null;
   publish();
   try {
-    const display = screen.getDisplayMatching(lab.getBounds()),
+    const display = screen.getPrimaryDisplay(),
       area = display.workArea;
-    if (targetName === "workspace") overlay.hide();
-    const width = targetName === "workspace" ? Math.min(1100, area.width) : 470;
-    const height =
-      targetName === "workspace" ? Math.min(740, area.height) : 520;
-    target.setBounds({
+    const width = 470,
+      height = 520;
+    buddy.setBounds({
       x: Math.round(area.x + (area.width - width) / 2),
       y: Math.round(area.y + (area.height - height) / 2),
       width,
       height,
     });
-    target.setIgnoreMouseEvents(false);
-    target.show();
-    target.moveTop();
-    // Only the synthetic target is unprotected. The other application window stays protected.
-    target.setContentProtection(false);
+    buddy.setIgnoreMouseEvents(false);
+    buddy.showInactive();
+    buddy.moveTop();
+    // Only Buddy, showing a synthetic card, is briefly unprotected.
+    buddy.setContentProtection(false);
     await delay(1100);
-    const baseline = await cropCapture(display, target),
+    const baseline = await cropCapture(display, buddy, capturePath),
       baselineCount = markerPixels(baseline);
-    target.setContentProtection(true);
+    buddy.setContentProtection(true);
     await delay(1100);
-    const protectedImage = await cropCapture(display, target),
+    const protectedImage = await cropCapture(display, buddy, capturePath),
       protectedCount = markerPixels(protectedImage);
     const valid = baselineCount > 1000;
     const outcome = !valid
@@ -288,17 +365,17 @@ async function runCapture(targetName = state.captureWindow) {
       outcome,
       baselineCount,
       protectedCount,
-      window: targetName,
+      window: "buddy",
       time: new Date().toISOString(),
       detail: !valid
         ? "The unprotected marker was not reliably captured. Retry with the screen unlocked."
         : outcome === "visible"
-          ? "The protected window remained visible in this capture path. Do not rely on it here."
+          ? "Buddy stayed visible in this capture path. Do not rely on it here."
           : outcome === "excluded"
-            ? "The synthetic marker disappeared in this capture path. Verify the actual recipient view for your meeting app."
+            ? "Buddy disappeared from this capture path. Check what the other person sees in your meeting app."
             : "The capture changed, but the result was ambiguous.",
       capturePath:
-        state.capturePath === "sck"
+        capturePath === "sck"
           ? "Apple ScreenCaptureKit SCStream, no excluded windows, synthetic window ROI"
           : "Electron desktopCapturer full-display thumbnail cropped to synthetic window bounds",
       baseline: baseline.toDataURL(),
@@ -307,570 +384,143 @@ async function runCapture(targetName = state.captureWindow) {
       os: state.os,
       electron: state.electron,
       limits:
-        "One local path for the selected window. This does not establish every meeting app, recorder, process detector, remote desktop or physical camera.",
+        "One local path. This does not establish every meeting app, recorder, process detector, remote desktop or physical camera.",
     };
     return state.result;
   } catch (error) {
-    state.result = {
-      outcome: "error",
-      detail: error.message,
-      window: targetName,
-    };
+    state.result = { outcome: "error", detail: error.message, window: "buddy" };
     return state.result;
   } finally {
-    target.setBounds(saved.bounds);
+    buddy.setBounds(saved.bounds);
     Object.assign(state, {
       protection: saved.protection,
-      clickThrough: saved.clickThrough,
-      visible: saved.visible,
       testing: false,
       testCard: false,
-      testWindow: "overlay",
     });
     busy = false;
     apply();
-    if (!saved.labVisible) lab.hide();
+    buddy.setIgnoreMouseEvents(true, { forward: true });
   }
 }
-async function action(name) {
-  if (name === "test") return runCapture();
-  if (name === "quit") {
-    app.quit();
-    return;
-  }
-  if (name === "recover") {
-    if (!busy) reveal();
-    return snapshot();
-  }
-  if (name === "hide-all") {
-    lab.hide();
-    overlay.hide();
-    state.visible = false;
-    publish();
-    return;
-  }
-  if (name === "compact") {
-    reveal();
-    lab.hide();
-    return;
-  }
-  if (name === "lab") {
-    lab.show();
-    lab.focus();
-    return;
-  }
-  if (name === "export") {
-    if (!state.result) throw new Error("Run a capture experiment first.");
-    const { dialog } = require("electron");
-    const result = await dialog.showSaveDialog(lab, {
-      defaultPath: "capture-result.json",
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (!result.canceled && result.filePath)
-      await fs.writeFile(
-        result.filePath,
-        JSON.stringify(state.result, null, 2),
-      );
-    return;
-  }
-  throw new Error("Unsupported action.");
+async function captureTest() {
+  const paths =
+    process.platform === "darwin" ? ["electron", "sck"] : ["electron"];
+  const results = [];
+  for (const capturePath of paths) results.push(await runCapture(capturePath));
+  const hidden = results.every((r) => r.outcome === "excluded");
+  if (process.platform === "darwin") app.focus({ steal: true });
+  await dialog.showMessageBox({
+    type: hidden ? "info" : "warning",
+    message: hidden
+      ? "Buddy was hidden from screen capture."
+      : "Buddy was not hidden in every test.",
+    detail: results
+      .map(
+        (r) =>
+          `${r.capturePath?.startsWith("Apple") ? "ScreenCaptureKit" : "Screen capture"}: ${r.detail}`,
+      )
+      .join("\n\n"),
+  });
+  return results;
 }
-async function verify() {
-  await fs.mkdir(artifactDir, { recursive: true });
-  const checks = [];
-  function check(name, fn) {
-    fn();
-    checks.push({ name, passed: true });
-  }
-  check("Both application windows have content protection", () => {
-    assert.equal(overlay.isContentProtected(), true);
-    assert.equal(lab.isContentProtected(), true);
-  });
-  check("Overlay is floating and omitted from Mission Control", () => {
-    assert.equal(overlay.isAlwaysOnTop(), true);
-    if (process.platform === "darwin")
-      assert.equal(overlay.isHiddenInMissionControl(), true);
-  });
-  check("Protection can be disabled and restored", () => {
-    change("protection", false);
-    assert.equal(overlay.isContentProtected(), false);
-    assert.equal(lab.isContentProtected(), false);
-    change("protection", true);
-    assert.equal(lab.isContentProtected(), true);
-    assert.equal(overlay.isContentProtected(), true);
-  });
-  check("Overlay can hide and recover", () => {
-    change("visible", false);
-    assert.equal(overlay.isVisible(), false);
-    reveal();
-    assert.equal(overlay.isVisible(), true);
-    assert.equal(state.clickThrough, false);
-  });
-  check("Input validation rejects unknown settings and oversized notes", () => {
-    assert.throws(() => change("arbitrary", true));
-    assert.throws(() => change("protection", "yes"));
-    assert.throws(() => change("notes", "x".repeat(12001)));
-  });
-  check("Recovery disables click-through", () => {
-    if (state.shortcuts.find((s) => s.action === "recover")?.registered) {
-      change("clickThrough", true);
-      reveal();
-      assert.equal(state.clickThrough, false);
-    }
-  });
-  check("Renderer is isolated and sandboxed", () => {
-    for (const win of [lab, overlay]) {
-      const p = win.webContents.getLastWebPreferences();
-      assert.equal(p.contextIsolation, true);
-      assert.equal(p.sandbox, true);
-      assert.equal(p.nodeIntegration, false);
-    }
-  });
-  await lab.webContents.executeJavaScript(
-    `document.querySelector('#protection').click()`,
-  );
-  await delay(250);
-  check("UI toggle reaches native window", () =>
-    assert.equal(overlay.isContentProtected(), false),
-  );
-  await lab.webContents.executeJavaScript(
-    `document.querySelector('#protection').click()`,
-  );
-  await delay(250);
-  check("UI toggle restores native protection", () =>
-    assert.equal(overlay.isContentProtected(), true),
-  );
-  await overlay.webContents.executeJavaScript(
-    `document.querySelector('#notes').value='Verified editable notes'; document.querySelector('#notes').dispatchEvent(new Event('input',{bubbles:true}));`,
-  );
-  await delay(250);
-  check("Editable notes reach local state", () =>
-    assert.equal(state.notes, "Verified editable notes"),
-  );
-  change(
-    "notes",
-    "Meeting agenda\n\n• Clarify the goal\n• Confirm open questions\n• Agree on the next step",
-  );
-  await interview.request("setting", { key: "locale", value: "en" });
-  await delay(180);
-  check("Locale changes the rendered interface", () =>
-    assert.equal(lab.webContents.getURL().startsWith("file:"), true),
-  );
-  const heading = await lab.webContents.executeJavaScript(
-    `document.querySelector('h1').textContent`,
-  );
-  check("English UI is translated", () => assert.equal(heading, "Interview"));
-  await interview.request("setting", { key: "locale", value: "ru" });
-  await assert.rejects(
-    interview.request("setting", { key: "speechLanguage", value: "invalid" }),
-  );
-  checks.push({ name: "Invalid interview settings rejected", passed: true });
-  if (process.argv.includes("--interview-test")) {
-    await interview.request("model");
-    for (let i = 0; i < 240 && !interview.state.whisper.ready; i++) {
-      if (interview.state.whisper.error)
-        throw new Error(interview.state.whisper.error);
-      await delay(1000);
-    }
-    assert.equal(interview.state.whisper.ready, true);
-    const raw = await fs.readFile(process.env.CAPTURE_LAB_TEST_AUDIO);
-    const buffer = raw.buffer.slice(
-      raw.byteOffset,
-      raw.byteOffset + raw.byteLength,
+
+// Menu-bar icon and menu.
+function trayImage(recording) {
+  if (process.platform !== "darwin")
+    return nativeImage.createFromPath(
+      path.join(__dirname, "..", "assets", "tray", "tray-windows.png"),
     );
-    await interview.request("recording", true);
-    const text = await interview.audio(buffer);
-    check("Real Whisper audio reaches transcript", () => {
-      assert.match(text, /country/i);
-      assert.ok(interview.state.transcript.length);
-    });
-    await interview.request("stop");
-    await delay(250);
-    const rendered = await lab.webContents.executeJavaScript(
-      `document.querySelector('#transcript').textContent`,
-    );
-    check("Transcript reaches the UI", () =>
-      assert.match(rendered, /country/i),
-    );
-    if (process.argv.includes("--live-ai-test")) {
-      if (process.env.CAPTURE_LAB_QUESTION_AUDIO) {
-        const rawQuestion = await fs.readFile(
-          process.env.CAPTURE_LAB_QUESTION_AUDIO,
-        );
-        await interview.request("recording", true);
-        const question = await interview.audio(
-          rawQuestion.buffer.slice(
-            rawQuestion.byteOffset,
-            rawQuestion.byteOffset + rawQuestion.byteLength,
-          ),
-        );
-        await interview.request("stop");
-        check("Spoken interview question is transcribed", () =>
-          assert.match(question, /list.*tuple/i),
-        );
-        await interview.request("setting", {
-          key: "answerLanguage",
-          value: "ru",
-        });
-        await interview.request("answer", "");
-      } else
-        await interview.request(
-          "answer",
-          "В чём разница между списком и кортежем в Python? Ответь кратко.",
-        );
-      await delay(300);
-      const response = await overlay.webContents.executeJavaScript(
-        `document.querySelector('#chat').textContent`,
-      );
-      check("Live ChatGPT answer reaches protected overlay", () => {
-        assert.ok(response.length > 80);
-        assert.match(response, /спис|кортеж/i);
-      });
-    }
-  }
-  if (process.argv.includes("--compact-test")) {
-    await require("./verify-compact.cjs")({
-      lab,
-      overlay,
-      interview,
-      action,
-      audioControl,
-      artifactDir,
-      check,
-    });
-  }
-  if (
-    process.argv.includes("--system-audio-test") &&
-    process.platform === "darwin"
-  ) {
-    await interview.request("clear");
-    await action("compact");
-    await overlay.webContents.executeJavaScript(
-      `document.querySelector('#audio-source').value='system';document.querySelector('#record').click()`,
-    );
-    for (
-      let i = 0;
-      i < 200 && (!interview.state.recording || audioControl.busy);
-      i++
-    )
-      await delay(100);
-    assert.equal(interview.state.recording, true);
-    await fs.writeFile(path.join(artifactDir, "native-audio-ready"), "ready");
-    await delay(14500);
-    await overlay.webContents.executeJavaScript(
-      `document.querySelector('#record').click()`,
-    );
-    for (
-      let i = 0;
-      i < 200 &&
-      (interview.state.recording ||
-        audioControl.busy ||
-        interview.state.whisper.pending);
-      i++
-    )
-      await delay(100);
-    check("Compact system audio captures real external playback", () => {
-      assert.equal(interview.state.recording, false);
-      assert.ok(audioControl.peak > 0.02);
-      assert.match(
-        interview.state.transcript.map((t) => t.text).join(" "),
-        /country|fellow|Americans/i,
-      );
-    });
-    await action("lab");
-  }
-  if (process.argv.includes("--screening-test")) {
-    await interview.request("setting", { key: "notesEnabled", value: false });
-    await delay(120);
-    const hiddenNotes = await overlay.webContents.executeJavaScript(
-      `document.querySelector('[data-overlay-tab="notes"]').hidden`,
-    );
-    check("Notes can be disabled and remain reachable for re-enabling", () => {
-      assert.equal(hiddenNotes, false);
-      assert.ok(state.notes.length);
-    });
-    await interview.request("setting", { key: "notesEnabled", value: true });
-    await delay(100);
-    check("Notes can be restored", () =>
-      assert.equal(interview.state.settings.notesEnabled, true),
-    );
-    const previousClipboard = clipboard.readText();
-    try {
-      clipboard.writeText("Unicode paste: Привет\n    return 42");
-      await lab.webContents.executeJavaScript(
-        `document.querySelector('#question').value=''; document.querySelector('#paste-question').click()`,
-      );
-      await delay(200);
-      const pasted = await lab.webContents.executeJavaScript(
-        `document.querySelector('#question').value`,
-      );
-      check("Paste button preserves Unicode and indentation", () =>
-        assert.equal(pasted, "Unicode paste: Привет\n    return 42"),
-      );
-      await lab.webContents.executeJavaScript(
-        `document.querySelector('#question').value='';document.querySelector('#question').dispatchEvent(new Event('input',{bubbles:true}))`,
-      );
-      await assert.rejects(
-        interview.request("window-capture", "window:unknown:0"),
-      );
-      checks.push({ name: "Unknown window capture is rejected", passed: true });
-      if (process.argv.includes("--vision-test")) {
-        const fixture = new BrowserWindow({
-          width: 820,
-          height: 520,
-          title: "Screening coding fixture",
-          webPreferences: {
-            sandbox: true,
-            contextIsolation: true,
-            nodeIntegration: false,
-          },
-        });
-        await fixture.loadURL(
-          "data:text/html;charset=utf-8," +
-            encodeURIComponent(
-              '<!doctype html><html><head><title>Screening coding fixture</title></head><body style="font:22px -apple-system,Segoe UI,sans-serif;padding:35px;background:#fff;color:#182333"><p style="font-size:12px;color:#777">SYNTHETIC INTERVIEW TASK</p><h1 style="font-size:30px">Pair sum</h1><p>Write a Python function that returns all unique pairs<br>from this list whose sum is 31.</p><pre style="padding:24px;background:#eff2f7;border-radius:8px">[4, 8, 15, 16, 23, 42]</pre><p>Use each list element at most once per pair.</p></body></html>',
-            ),
-        );
-        try {
-          fixture.show();
-          await delay(800);
-          let selected;
-          for (let attempt = 0; attempt < 8 && !selected; attempt++) {
-            selected = await overlay.webContents.executeJavaScript(
-              `window.captureLab.request('windows').then(sources=>sources.find(source=>source.name==='Screening coding fixture'))`,
-            );
-            if (!selected) await delay(350);
-          }
-          await action("compact");
-          async function sendCompactQuestion(question) {
-            const previous = interview.state.messages.length;
-            await overlay.webContents.executeJavaScript(
-              `document.querySelector('#question').value=${JSON.stringify(question)};document.querySelector('#question-form').requestSubmit()`,
-            );
-            for (
-              let i = 0;
-              i < 220 &&
-              (interview.state.messages.length === previous ||
-                interview.state.ai.busy);
-              i++
-            )
-              await delay(500);
-            assert.equal(interview.state.messages.length, previous + 2);
-            if (interview.state.ai.error)
-              throw new Error(interview.state.ai.error);
-          }
-          assert.ok(
-            selected,
-            "Synthetic window is available to the real OS picker",
-          );
-          await overlay.webContents.executeJavaScript(
-            `document.querySelector('#choose-window').click()`,
-          );
-          let pickerReady = false;
-          for (let attempt = 0; attempt < 8 && !pickerReady; attempt++) {
-            await delay(450);
-            pickerReady = await overlay.webContents.executeJavaScript(
-              `Array.from(document.querySelectorAll('#window-list .window-option')).some(button=>button.title==='Screening coding fixture')`,
-            );
-            if (!pickerReady)
-              await overlay.webContents.executeJavaScript(
-                `document.querySelector('#refresh-windows').click()`,
-              );
-          }
-          assert.equal(pickerReady, true);
-          // Only the synthetic entry is retained in the public validation screenshot.
-          await overlay.webContents.executeJavaScript(
-            `document.querySelectorAll('#window-list .window-option').forEach(button=>{if(button.title!=='Screening coding fixture')button.remove()})`,
-          );
-          await fs.writeFile(
-            path.join(artifactDir, "window-picker.png"),
-            (await overlay.webContents.capturePage()).toPNG(),
-          );
-          await overlay.webContents.executeJavaScript(
-            `document.querySelector('#window-list .window-option').click()`,
-          );
-          for (let i = 0; i < 100 && !interview.state.attachment; i++)
-            await delay(100);
-          check("Selected window creates a single readable attachment", () => {
-            assert.ok(
-              interview.state.attachment.dataUrl.startsWith(
-                "data:image/png;base64,",
-              ),
-            );
-            assert.ok(interview.state.attachment.width >= 800);
-          });
-          await overlay.webContents.executeJavaScript(
-            `window.captureLab.request("remove-attachment")`,
-          );
-          check("Pending screenshot can be removed before sending", () =>
-            assert.equal(interview.state.attachment, null),
-          );
-          await overlay.webContents.executeJavaScript(
-            `window.captureLab.request("window-capture",${JSON.stringify(selected.id)})`,
-          );
-          await interview.request("clear");
-          await overlay.webContents.executeJavaScript(
-            `window.captureLab.request("window-capture",${JSON.stringify(selected.id)})`,
-          );
-          await interview.request("setting", {
-            key: "interviewType",
-            value: "coding",
-          });
-          await interview.request("setting", {
-            key: "answerLanguage",
-            value: "ru",
-          });
-          await sendCompactQuestion(
-            "Прочитай задачу на прикреплённом снимке. Реши её на Python и перечисли найденные пары.",
-          );
-          check("Live ChatGPT reads the selected window image", () => {
-            assert.match(
-              interview.state.ai.answer,
-              /8[\s\S]{0,20}23|23[\s\S]{0,20}8/,
-            );
-            assert.match(
-              interview.state.ai.answer,
-              /15[\s\S]{0,20}16|16[\s\S]{0,20}15/,
-            );
-            assert.match(interview.state.ai.answer, /```/);
-            assert.equal(interview.state.attachment, null);
-          });
-          await sendCompactQuestion(
-            "Теперь измени целевую сумму на 46. Используй тот же исходный список. Какие пары получатся?",
-          );
-          check("Follow-up uses the preceding conversation", () => {
-            assert.equal(interview.state.messages.length, 4);
-            assert.match(
-              interview.state.ai.answer,
-              /4[\s\S]{0,20}42|42[\s\S]{0,20}4/,
-            );
-          });
-          await delay(200);
-          const count = await overlay.webContents.executeJavaScript(
-            `document.querySelectorAll('#chat .chat-message').length`,
-          );
-          check("Compact chat renders both questions and both answers", () =>
-            assert.equal(count, 4),
-          );
-          const expectedCode = await overlay.webContents.executeJavaScript(
-            `document.querySelector('#chat .code-block pre').textContent`,
-          );
-          await overlay.webContents.executeJavaScript(
-            `document.querySelector('#chat .code-block button').click()`,
-          );
-          await delay(150);
-          check("Compact copy preserves the exact displayed code", () =>
-            assert.equal(clipboard.readText(), expectedCode),
-          );
-          await overlay.webContents.executeJavaScript(
-            `document.querySelector('#chat .assistant').scrollIntoView({block:'start'})`,
-          );
-          await delay(200);
-          await fs.writeFile(
-            path.join(artifactDir, "chat-answer.png"),
-            (await overlay.webContents.capturePage()).toPNG(),
-          );
-        } finally {
-          fixture.destroy();
-          await action("lab");
-        }
-      }
-    } finally {
-      clipboard.writeText(previousClipboard);
-    }
-    const normalBounds = lab.getBounds();
-    lab.setSize(960, 700);
-    await delay(200);
-    const fits = await lab.webContents.executeJavaScript(
-      `({page: document.documentElement.scrollWidth <= innerWidth, composer: document.querySelector('#question-form').getBoundingClientRect().right <= innerWidth, chat: document.querySelector('#chat').clientHeight > 100})`,
-    );
-    check("Minimum workspace size fits the chat and composer", () => {
-      assert.equal(fits.page, true);
-      assert.equal(fits.composer, true);
-      assert.equal(fits.chat, true);
-    });
-    await fs.writeFile(
-      path.join(artifactDir, "minimum-ui.png"),
-      (await lab.webContents.capturePage()).toPNG(),
-    );
-    lab.setBounds(normalBounds);
-  }
-  const captureResults = [];
-  if (process.argv.includes("--capture-test")) {
-    for (const window of ["overlay", "workspace"])
-      captureResults.push(await runCapture(window));
-    if (process.platform === "darwin") {
-      change("capturePath", "sck");
-      for (const window of ["overlay", "workspace"])
-        captureResults.push(await runCapture(window));
-    }
-  }
-  await fs.writeFile(
-    path.join(artifactDir, "verification.json"),
-    JSON.stringify(
-      {
-        checks,
-        state: snapshot(),
-        captureResults,
-        note: "UI previews use capturePage and cannot establish OS capture exclusion.",
-      },
-      null,
-      2,
+  const image = nativeImage.createFromPath(
+    path.join(
+      __dirname,
+      "..",
+      "assets",
+      "tray",
+      recording ? "trayRecordingTemplate.png" : "trayTemplate.png",
     ),
   );
-  const previewWarnings = [];
-  for (const [name, win] of [
-    ["lab-ui.png", lab],
-    ["overlay-ui.png", overlay],
-  ]) {
-    let timeout;
-    try {
-      win.webContents.invalidate();
-      const image = await Promise.race([
-        win.webContents.capturePage(undefined, {
-          stayHidden: true,
-          stayAwake: true,
-        }),
-        new Promise((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("UI preview timed out")),
-            5000,
-          );
-        }),
-      ]);
-      await fs.writeFile(path.join(artifactDir, name), image.toPNG());
-    } catch (error) {
-      previewWarnings.push({ name, error: error.message });
-    } finally {
-      clearTimeout(timeout);
+  image.setTemplateImage(true);
+  return image;
+}
+async function runMenu(id) {
+  const [kind, key, value] = id.split(":");
+  if (kind === "setting") {
+    const current = interview.state.settings[key];
+    return interview.request("setting", {
+      key,
+      value: value === undefined ? !current : value,
+    });
+  }
+  const actions = {
+    "listen-system": () => audio("start", "system"),
+    "listen-microphone": () => audio("start", "microphone"),
+    stop: () => audio("stop"),
+    answer: () => interview.request("answer", ""),
+    ask,
+    "toggle-buddy": () => setHidden(!state.hidden),
+    protection: () => change("protection", !state.protection),
+    "capture-test": captureTest,
+    model: () => interview.request("model"),
+    login: () => interview.request("login"),
+    account: () => interview.request("account"),
+    export: () => interview.request("export"),
+    clear: () => interview.request("clear"),
+    quit: () => app.quit(),
+  };
+  if (!actions[id]) throw new Error(`Unknown menu item ${id}`);
+  return actions[id]();
+}
+function electronMenu(items) {
+  return items.map(({ id, submenu, ...item }) => ({
+    ...item,
+    ...(id ? { id, click: () => runMenu(id).catch(report) } : {}),
+    ...(submenu ? { submenu: electronMenu(submenu) } : {}),
+  }));
+}
+function syncTray(value) {
+  if (!tray || tray.isDestroyed()) return;
+  const recording = Boolean(value.interview?.recording);
+  if (recording !== trayRecording) {
+    trayRecording = recording;
+    tray.setImage(trayImage(recording));
+    if (!recording && process.platform === "darwin") {
+      trayTitle = "";
+      tray.setTitle("");
     }
   }
-  if (previewWarnings.length)
-    await fs.writeFile(
-      path.join(artifactDir, "preview-warnings.json"),
-      JSON.stringify(previewWarnings, null, 2),
-    );
-  console.log(
-    JSON.stringify({
-      passed: checks.length,
-      permission: permission(),
-      captures: captureResults.map((r) => ({
-        path: r.capturePath,
-        outcome: r.outcome,
-      })),
-      artifactDir,
-    }),
-  );
-  if (!process.argv.includes("--keep-open")) app.quit();
+  const items = trayMenu(value, process.platform);
+  const key = JSON.stringify(items);
+  if (key === trayKey) return;
+  trayKey = key;
+  tray.setContextMenu(Menu.buildFromTemplate(electronMenu(items)));
+  tray.setToolTip(`Screening · ${items[0].label}`);
 }
+let trayTitle = "";
+function tickTray() {
+  if (!tray || tray.isDestroyed() || process.platform !== "darwin") return;
+  const current = interview?.state;
+  const title =
+    current?.recording && current.startedAt
+      ? formatElapsed(Date.now() - current.startedAt)
+      : "";
+  if (title === trayTitle) return;
+  trayTitle = title;
+  tray.setTitle(title, { fontType: "monospacedDigit" });
+}
+
 app
   .whenReady()
   .then(async () => {
-    ipcMain.handle("lab:state", () => snapshot());
+    if (process.platform === "darwin") app.dock?.hide();
+    ipcMain.handle("lab:state", (event) =>
+      event.senderFrame === engine?.webContents.mainFrame
+        ? engineSnapshot(snapshot())
+        : lightSnapshot(snapshot()),
+    );
     session.defaultSession.setPermissionRequestHandler(
       (contents, permission, callback, details) => {
         callback(
-          contents === lab?.webContents &&
+          contents === engine?.webContents &&
             permission === "media" &&
             details.mediaTypes?.every((t) => t === "audio"),
         );
@@ -878,7 +528,7 @@ app
     );
     session.defaultSession.setPermissionCheckHandler(
       (contents, permission, _origin, details) =>
-        contents === lab?.webContents &&
+        contents === engine?.webContents &&
         permission === "media" &&
         details.mediaType === "audio",
     );
@@ -886,7 +536,7 @@ app
       async (request, callback) => {
         if (
           process.platform !== "win32" ||
-          request.frame !== lab?.webContents.mainFrame ||
+          request.frame !== engine?.webContents.mainFrame ||
           !request.audioRequested
         )
           return callback(null);
@@ -908,135 +558,93 @@ app
     );
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
-        {
-          label: "Screening",
-          submenu: [
-            {
-              label: "Show Screening",
-              click: () => {
-                lab.show();
-                lab.focus();
-              },
-            },
-            { label: "Recover Overlay", click: reveal },
-            { type: "separator" },
-            { role: "quit" },
-          ],
-        },
-        {
-          label: "Edit",
-          submenu: [
-            { role: "undo" },
-            { role: "redo" },
-            { type: "separator" },
-            { role: "cut" },
-            { role: "copy" },
-            { role: "paste" },
-            { role: "selectAll" },
-          ],
-        },
+        { label: "Screening", submenu: [{ role: "quit" }] },
+        { role: "editMenu" },
       ]),
     );
-    const area = screen.getPrimaryDisplay().workArea;
-    lab = create("index.html", {
-      title: "Screening",
-      width: Math.min(1180, area.width),
-      height: Math.min(840, area.height),
-      minWidth: 960,
-      minHeight: 700,
-      titleBarStyle: "hiddenInset",
+
+    engine = create("engine.html", {
+      title: "Screening audio engine",
+      width: 320,
+      height: 200,
+      skipTaskbar: true,
+      focusable: false,
     });
-    const compactHeight = Math.min(720, area.height - 30);
-    overlay = create("overlay.html", {
-      title: "Screening — Assistant",
-      width: 540,
-      height: compactHeight,
-      minWidth: 420,
-      minHeight: 580,
-      x: area.x + area.width - 570,
-      y: area.y + 15,
+    const buddyBounds = await placeBuddy();
+    buddy = create("buddy.html", {
+      title: "Screening — Buddy",
+      ...buddyBounds,
       frame: false,
-      transparent: false,
+      transparent: true,
+      backgroundColor: "#00000000",
+      hasShadow: false,
+      roundedCorners: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      // The meeting app keeps keyboard focus until a Buddy text field is used.
+      focusable: false,
+      acceptFirstMouse: true,
+      // Frameless windows may then sit over the menu bar, next to the notch.
+      enableLargerThanScreen: true,
       alwaysOnTop: true,
       skipTaskbar: true,
       hiddenInMissionControl: true,
       type: process.platform === "darwin" ? "panel" : undefined,
     });
-    overlay.setContentProtection(true);
+    buddy.setAlwaysOnTop(true, "screen-saver");
+    buddy.setIgnoreMouseEvents(true, { forward: true });
     if (process.platform === "darwin")
-      overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    overlay.on("close", (event) => {
+      buddy.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    buddy.on("close", (event) => {
       if (!quitting) {
         event.preventDefault();
-        state.visible = false;
-        overlay.hide();
-        publish();
+        setHidden(true);
       }
     });
-    lab.on("close", (event) => {
-      if (!quitting) {
-        event.preventDefault();
-        action("compact");
-      }
+    buddy.on("blur", () => {
+      if (alive(buddy) && buddy.isFocusable()) buddy.setFocusable(false);
     });
-    for (const win of [lab, overlay])
-      win.webContents.on("did-finish-load", publish);
+    for (const event of [
+      "display-metrics-changed",
+      "display-added",
+      "display-removed",
+    ])
+      screen.on(event, () => placeBuddy().then(publish).catch(console.error));
+    buddy.webContents.on("did-finish-load", publish);
+
     interview = await require("./services/interview.cjs").createInterview(
       app,
       publish,
-      () => lab,
+      () => undefined,
       {
         windowCapture:
           new (require("./services/window-capture.cjs").WindowCapture)(() => [
-            lab.getMediaSourceId(),
-            overlay.getMediaSourceId(),
+            buddy.getMediaSourceId(),
+            engine.getMediaSourceId(),
           ]),
         getNotes: () => state.notes,
         onLevel: publishAudioLevel,
-        onDraft: (value) => {
-          for (const win of [lab, overlay])
-            if (win && !win.isDestroyed())
-              win.webContents.send("draft:update", value);
-        },
       },
     );
     audioRouting = new (require("./services/audio-routing.cjs").AudioRouting)(
-      (command) => lab.webContents.send("audio:command", command),
+      (command) => engine.webContents.send("audio:command", command),
     );
+
+    tray = new Tray(trayImage(false));
+    trayRecording = false;
+    // Windows opens tray menus with a right-click; a left-click toggles Buddy.
+    if (process.platform === "win32")
+      tray.on("click", () => setHidden(!state.hidden));
+    setInterval(tickTray, 1000);
+
     const shortcuts = [
-      ["hide-all", "CommandOrControl+Shift+H", () => action("hide-all")],
-      [
-        "toggle",
-        "CommandOrControl+Shift+Space",
-        () => {
-          if (!busy) change("visible", !state.visible);
-        },
-      ],
-      [
-        "recover",
-        "CommandOrControl+Shift+R",
-        () => {
-          if (!busy) reveal();
-        },
-      ],
-      [
-        "answer",
-        "CommandOrControl+Shift+Enter",
-        () => {
-          interview.request("answer", "").catch((error) => {
-            interview.state.error = error.message;
-            publish();
-          });
-        },
-      ],
-      [
-        "lab",
-        "CommandOrControl+Shift+L",
-        () => {
-          lab.show();
-          lab.focus();
-        },
-      ],
+      ["buddy", KEYS.buddy, () => setHidden(!state.hidden)],
+      ["ask", KEYS.ask, ask],
+      ["answer", KEYS.answer, attempt(() => interview.request("answer", ""))],
+      ["listen", KEYS.listen, attempt(toggleListening)],
     ];
     for (const [action, accelerator, handler] of shortcuts)
       state.shortcuts.push({
@@ -1044,71 +652,58 @@ app
         accelerator,
         registered: globalShortcut.register(accelerator, handler),
       });
-    // Only our two top-level renderers can access the narrow local bridge.
+
+    // Only Buddy and the engine can use the local bridge; only the engine owns audio.
     const ownFrame = (event) =>
-      [lab, overlay].some(
-        (w) =>
-          !w.isDestroyed() && event.senderFrame === w.webContents.mainFrame,
+      [buddy, engine].some(
+        (w) => alive(w) && event.senderFrame === w.webContents.mainFrame,
       );
+    const fromEngine = (event) =>
+      event.senderFrame === engine.webContents.mainFrame;
     ipcMain.handle("lab:change", (event, key, value) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
       return change(key, value);
     });
     ipcMain.handle("lab:action", (event, name) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
-      return action(name);
+      if (name === "hide") return setHidden(true);
+      throw new Error("Unsupported action.");
+    });
+    // Outside the island, clicks pass through to the apps below.
+    ipcMain.on("buddy:mouse", (event, inside) => {
+      if (event.senderFrame !== buddy.webContents.mainFrame || state.testing)
+        return;
+      buddy.setIgnoreMouseEvents(!inside, { forward: true });
+    });
+    ipcMain.on("buddy:keyboard", (event, on) => {
+      if (event.senderFrame !== buddy.webContents.mainFrame) return;
+      on ? takeKeyboard() : releaseKeyboard();
     });
     ipcMain.on("audio:level", (event, value) => {
       if (
-        event.senderFrame === lab.webContents.mainFrame &&
+        fromEngine(event) &&
         interview.state.recording &&
         typeof value === "number"
       )
         publishAudioLevel(value);
     });
     ipcMain.handle("audio:complete", (event, id, error) => {
-      if (event.senderFrame !== lab.webContents.mainFrame)
-        throw new Error("Untrusted audio owner");
+      if (!fromEngine(event)) throw new Error("Untrusted audio owner");
       audioRouting.complete(id, error);
     });
     ipcMain.handle("interview:request", async (event, op, payload) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
-      if (op === "audio-start" || op === "audio-stop") {
-        if (audioControl.busy)
-          throw new Error("Audio is starting or stopping. Wait a moment.");
-        if (op === "audio-start" && !["microphone", "system"].includes(payload))
-          throw new Error("Invalid audio source");
-        if (op === "audio-start" && !interview.state.whisper.ready)
-          throw new Error("Set up Whisper before starting audio.");
-        if (op === "audio-start" && interview.state.recording)
-          throw new Error("Audio is already running.");
-        if (op === "audio-start") audioControl.peak = 0;
-        audioControl.phase = op === "audio-start" ? "starting" : "stopping";
-        audioControl.busy = true;
-        publish();
-        try {
-          if (op === "audio-stop") {
-            if (
-              process.platform === "darwin" &&
-              interview.state.source === "system"
-            )
-              await interview.request("stop");
-            else await audioRouting.command("stop");
-          } else if (process.platform === "darwin" && payload === "system")
-            await interview.request("system-start");
-          else await audioRouting.command("start", payload);
-        } finally {
-          audioControl.busy = false;
-          audioControl.phase = null;
+      if (op === "audio-start") return audio("start", payload);
+      if (op === "audio-stop") return audio("stop");
+      if (["recording", "stop", "audio-error"].includes(op)) {
+        if (!fromEngine(event))
+          throw new Error("Only the audio engine can do this.");
+        if (op === "audio-error") {
+          interview.state.error = String(payload).slice(0, 500);
           publish();
+          return;
         }
-        return;
       }
-      if (
-        ["recording", "stop"].includes(op) &&
-        event.senderFrame !== lab.webContents.mainFrame
-      )
-        throw new Error("Use shared audio controls.");
       if (op === "clipboard-read") return clipboard.readText().slice(0, 16000);
       if (op === "clipboard-write") {
         if (typeof payload !== "string" || payload.length > 64000)
@@ -1119,12 +714,11 @@ app
       return interview.request(op, payload);
     });
     ipcMain.handle("interview:audio", (event, buffer) => {
-      if (event.senderFrame !== lab.webContents.mainFrame)
-        throw new Error("Untrusted frame");
+      if (!fromEngine(event)) throw new Error("Untrusted frame");
       return interview.audio(buffer);
     });
     await Promise.all(
-      [lab, overlay].map(
+      [buddy, engine].map(
         (win) =>
           new Promise((resolve) =>
             win.webContents.isLoading()
@@ -1133,17 +727,30 @@ app
           ),
       ),
     );
-    if (verification) {
-      lab.show();
-      overlay.showInactive();
-    } else {
-      lab.hide();
-      reveal();
-    }
     publish();
     if (verification) {
       await delay(800);
-      await verify();
+      await require("./verify.cjs")({
+        app,
+        buddy,
+        engine,
+        tray,
+        interview,
+        state,
+        audioControl,
+        keyboard,
+        artifactDir,
+        layout: () => buddyLayout,
+        publish,
+        change,
+        setHidden,
+        ask,
+        audio,
+        runCapture,
+        permission,
+        delay,
+      });
+      if (!process.argv.includes("--keep-open")) app.quit();
     }
   })
   .catch((error) => {
@@ -1157,16 +764,7 @@ app.on("before-quit", () => {
 });
 app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => app.quit());
-app.on("activate", () => {
-  if (lab && !lab.isDestroyed()) {
-    if (lab.isVisible()) lab.focus();
-    else reveal();
-  }
-});
-
-app.on("second-instance", () => {
-  if (lab && !lab.isDestroyed()) {
-    if (lab.isVisible()) lab.focus();
-    else reveal();
-  }
-});
+for (const event of ["activate", "second-instance"])
+  app.on(event, () => {
+    if (alive(buddy)) setHidden(false);
+  });

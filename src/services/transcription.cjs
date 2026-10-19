@@ -2,13 +2,36 @@ const { Worker } = require("node:worker_threads");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
+const { SPEECH_MODEL } = require("./speech-model.cjs");
+// Whisper runs in a worker thread that is loaded only while it is needed:
+// listening keeps it warm, and it unloads after a quiet period. A loaded model
+// holds 0.7 GB (fast) to 2.4 GB (accurate), so an idle app should not keep it.
+const IDLE_UNLOAD_MS = 90000;
+const sameModel = (a, b) =>
+  a.id === b.id && JSON.stringify(a.dtype) === JSON.stringify(b.dtype);
 class Transcription {
-  constructor(cacheDir, onChange, onText, onLevel = () => {}) {
+  constructor(
+    cacheDir,
+    onChange,
+    onText,
+    onLevel = () => {},
+    model = SPEECH_MODEL,
+    { createWorker, idleMs = IDLE_UNLOAD_MS } = {},
+  ) {
     this.cacheDir = cacheDir;
+    this.model = model;
     this.onChange = onChange;
     this.onText = onText;
     this.onLevel = onLevel;
+    this.createWorker =
+      createWorker ||
+      ((workerData) =>
+        new Worker(path.join(__dirname, "whisper-worker.cjs"), { workerData }));
+    this.idleMs = idleMs;
     this.worker = null;
+    this.loaded = false;
+    this.warm = false;
+    this.idleTimer = null;
     this.native = null;
     this.pending = new Map();
     this.nextId = 0;
@@ -28,30 +51,38 @@ class Transcription {
     Object.assign(this.state, patch);
     this.onChange?.(this.state);
   }
+  // The model is on disk; it loads on first use.
+  markDownloaded() {
+    this.update({ ready: true, status: "ready", error: null });
+  }
   load() {
+    this.cancelUnload();
     if (this.worker) {
-      if (this.state.ready) this.update({ status: "ready" });
+      if (this.loaded) this.update({ status: "ready" });
       return;
     }
-    fs.mkdirSync(this.cacheDir, { recursive: true });
+    if (!this.state.ready) fs.mkdirSync(this.cacheDir, { recursive: true });
     this.update({ status: "loading", error: null });
-    this.worker = new Worker(path.join(__dirname, "whisper-worker.cjs"), {
-      workerData: { cacheDir: this.cacheDir },
-    });
-    this.worker.on("message", (msg) => {
+    const worker = this.createWorker({ cacheDir: this.cacheDir, model: this.model });
+    this.worker = worker;
+    worker.on("message", (msg) => {
+      if (worker !== this.worker) return;
       if (msg.type === "progress")
         this.update({
           status: "loading",
           progress: msg.progress ?? null,
           file: msg.file || "",
         });
-      if (msg.type === "ready")
+      if (msg.type === "ready") {
+        this.loaded = true;
         this.update({
           status: "ready",
           ready: true,
           progress: 100,
           error: null,
         });
+        this.scheduleUnload();
+      }
       if (msg.type === "text" || msg.type === "error") {
         const job = this.pending.get(msg.id);
         this.pending.delete(msg.id);
@@ -64,23 +95,74 @@ class Transcription {
           });
           job?.reject(new Error(msg.error));
           if (msg.id === undefined) {
-            this.worker?.terminate();
+            worker.terminate();
             this.worker = null;
+            this.loaded = false;
           }
         } else {
           job?.resolve(msg.text);
           if (msg.text && job?.generation === this.generation)
             this.onText?.(msg.text);
         }
+        this.scheduleUnload();
       }
     });
-    this.worker.on("error", (e) => {
+    worker.on("error", (e) => {
+      if (worker !== this.worker) return;
       this.update({ status: "error", ready: false, error: e.message });
       for (const job of this.pending.values()) job.reject(e);
       this.pending.clear();
       this.worker = null;
+      this.loaded = false;
     });
-    this.worker.postMessage({ type: "load" });
+    worker.postMessage({ type: "load" });
+  }
+  // Listening keeps the model loaded; stopping lets it unload after a while.
+  keepWarm(on) {
+    this.warm = on;
+    if (on) {
+      if (this.state.ready) this.load();
+    } else this.scheduleUnload();
+  }
+  cancelUnload() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+  scheduleUnload() {
+    this.cancelUnload();
+    if (this.warm || !this.worker || !this.loaded) return;
+    this.idleTimer = setTimeout(() => this.unload(), this.idleMs);
+    this.idleTimer.unref?.();
+  }
+  unload() {
+    if (this.warm || !this.worker) return;
+    if (this.pending.size) return this.scheduleUnload();
+    this.cancelUnload();
+    this.worker.terminate();
+    this.worker = null;
+    this.loaded = false;
+    this.update({ status: this.state.ready ? "ready" : "idle" });
+  }
+  // Unloads the current model so the next load() uses the new one.
+  setModel(model) {
+    if (sameModel(model, this.model)) return false;
+    this.cancelUnload();
+    this.worker?.terminate();
+    this.worker = null;
+    this.loaded = false;
+    for (const job of this.pending.values())
+      job.reject(new Error("The speech model changed."));
+    this.pending.clear();
+    this.model = model;
+    this.update({
+      status: "idle",
+      ready: false,
+      progress: null,
+      file: "",
+      error: null,
+      pending: 0,
+    });
+    return true;
   }
   transcribe(samples, language = "auto") {
     if (!this.state.ready)
@@ -100,6 +182,8 @@ class Transcription {
     for (const v of samples)
       if (!Number.isFinite(v))
         return Promise.reject(new Error("Invalid audio sample"));
+    if (!this.worker) this.load();
+    this.cancelUnload();
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, generation: this.generation });
@@ -214,6 +298,7 @@ class Transcription {
     this.generation++;
   }
   close() {
+    this.cancelUnload();
     this.native?.kill();
     this.worker?.terminate();
     for (const job of this.pending.values()) job.reject(new Error("Closed"));

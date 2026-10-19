@@ -10,31 +10,18 @@ if (process.platform !== "darwin") {
 const root = path.resolve(__dirname, "..");
 const arch = process.arch === "arm64" ? "arm64" : "x86_64";
 fs.mkdirSync(path.join(root, "bin"), { recursive: true });
-execFileSync(
-  "xcrun",
-  [
-    "swiftc",
-    "-parse-as-library",
-    "-O",
-    "-target",
-    `${arch}-apple-macosx14.0`,
-    path.join(__dirname, "capture-sck.swift"),
-    "-o",
-    path.join(root, "bin/capture-sck"),
-  ],
-  { stdio: "inherit" },
-);
-execFileSync(
-  "xcrun",
-  [
-    "swiftc",
-    "-parse-as-library",
-    "-O",
-    "-target",
-    `${arch}-apple-macosx14.0`,
-    path.join(__dirname, "audio-sck.swift"),
-    "-o",
-    path.join(root, "bin/audio-sck"),
-  ],
-  { stdio: "inherit" },
-);
+for (const helper of ["capture-sck", "audio-sck", "notch-info"])
+  execFileSync(
+    "xcrun",
+    [
+      "swiftc",
+      "-parse-as-library",
+      "-O",
+      "-target",
+      `${arch}-apple-macosx14.0`,
+      path.join(__dirname, `${helper}.swift`),
+      "-o",
+      path.join(root, "bin", helper),
+    ],
+    { stdio: "inherit" },
+  );

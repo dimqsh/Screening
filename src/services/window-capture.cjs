@@ -52,6 +52,8 @@ class WindowCapture {
     return {
       name: source.name,
       dataUrl: image.toDataURL(),
+      // Buddy shows this small copy; only ChatGPT gets the full image.
+      preview: `data:image/jpeg;base64,${image.resize({ width: 240 }).toJPEG(75).toString("base64")}`,
       width: size.width,
       height: size.height,
       time: new Date().toISOString(),

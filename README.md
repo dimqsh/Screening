@@ -8,12 +8,21 @@ There are no other windows. A small island icon in the menu bar is the way in.
 
 ## Get started
 
-1. Install the DMG (Apple Silicon) or the EXE (Windows x64) from this repository’s Releases.
-2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with two setup steps.
+1. Install Screening.
+   - **Mac (Apple Silicon):** paste this in Terminal. It downloads the newest DMG, copies Screening to Applications and opens it.
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/dimqsh/Screening/main/install.sh | bash
+     ```
+
+     Or download the DMG from [Releases](https://github.com/dimqsh/Screening/releases), drag Screening to Applications, then right-click it and choose **Open** the first time.
+   - **Windows (x64):** run the EXE from [Releases](https://github.com/dimqsh/Screening/releases). If SmartScreen warns, choose **More info**, then **Run anyway**.
+2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with its setup steps.
 3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
 4. **Sign in with ChatGPT.** The bundled official Codex CLI opens your browser. Your ChatGPT plan, model access and limits apply. This does not turn a ChatGPT subscription into an OpenAI API key.
-5. In Buddy, press **Call audio** to listen to the interviewer, or **Microphone** to listen to yourself. Press it again, now labeled **Stop**, to stop. Allow the audio and screen permissions macOS or Windows asks for.
-6. When the interviewer finishes a question, press Cmd/Ctrl+Shift+Enter. Buddy opens and streams the answer under your camera.
+5. **Allow microphone and screen access** on a Mac. One button asks for both. If macOS opens System Settings instead, turn on Screening there and choose **Quit & Reopen**. You can do this later from the menu.
+6. In Buddy, press **Call audio** to listen to the interviewer, or **Microphone** to listen to yourself. Press it again, now labeled **Stop**, to stop.
+7. When the interviewer finishes a question, press Cmd/Ctrl+Shift+Enter. Buddy opens and streams the answer under your camera.
 
 ## Buddy
 
@@ -27,11 +36,13 @@ There are no other windows. A small island icon in the menu bar is the way in.
   - **You**: your target role, skills and real wins. Buddy uses only what you write here and never makes up achievements.
 - **Snapshot** a window to send a coding task or a diagram. Buddy takes one image, shows it in the box, and sends it with your next message.
 - Buddy never takes the keyboard on its own, so Zoom, Meet or Teams keeps it. Buddy takes the keyboard only while you type in one of its fields, and gives it back when you send, press Escape or click elsewhere. Outside the island, clicks pass through to the apps below.
+- **Drag Buddy by its top bar** to take it off the notch. It becomes a small window you can leave anywhere, and Screening remembers where. **Snap Buddy to the Notch** in the menu puts it back.
+- Floating Buddy, and Buddy on screens narrower than 1400 points, use a compact layout: a narrower island with the face and steps above the chips.
 - On Windows, and on Macs without a notch, Buddy hangs from the top edge as a small pill.
 
 ## The menu-bar menu
 
-Click the island icon in the menu bar for everything else: start or stop listening, answer, ask, show or hide Buddy, interview type, answer length, automatic answers, notes in answers, speech and answer language, **Hide From Screen Sharing**, **Test Screen Sharing Protection**, setup status, **Export Session**, **New Session** and **Quit**. While Screening listens, the icon fills in and the menu bar shows the elapsed time.
+Click the island icon in the menu bar for everything else: start or stop listening, answer, ask, show or hide Buddy, **Float Buddy** or **Snap Buddy to the Notch**, **Allow Microphone and Screen…** while either is off, interview type, answer length, automatic answers, notes in answers, speech and answer language, **Hide From Screen Sharing**, **Test Screen Sharing Protection**, setup status, **Export Session**, **New Session** and **Quit**. While Screening listens, the icon fills in and the menu bar shows the elapsed time.
 
 | Action                       | Shortcut             |
 | ---------------------------- | -------------------- |
@@ -63,7 +74,7 @@ ChatGPT sign-in uses the official, bundled `@openai/codex` CLI. Screening never 
 
 Whisper receives audio on your computer. ChatGPT receives the typed question or the latest four transcript chunks, your background from the **You** tab, a bounded recent conversation, and notes only when **Use notes in answers** is on. A window snapshot is sent once, with the next message. The temporary image file is removed after the request or when Screening quits. Window thumbnails in the picker stay on your computer. Nothing watches the active window or captures it on a timer. Requests use ephemeral, read-only Codex execution, ignore user config, plugins and MCP, and disable shell and web tools. Answers need internet and count against your Codex allowance. Screening is an independent project, not an OpenAI product.
 
-Whisper loads into memory when you start listening, and unloads 90 seconds after you stop or after the last transcription. A loaded model uses about 0.7 GB (Fast) or 2.4 GB (Accurate); an idle Screening uses about 120 MB in total.
+Whisper runs in its own process at a lower CPU priority, so the meeting app and Buddy stay smooth while it works. It loads into memory when you start listening, and unloads 90 seconds after you stop or after the last transcription. A loaded model uses about 0.7 GB (Fast) or 2.4 GB (Accurate); an idle Screening uses about 120 MB in total.
 
 Audio, transcripts, answers, notes and snapshots stay in memory and are not saved automatically. Buddy keeps up to 60 messages and six snapshots; ChatGPT gets the latest 12 messages within a 24,000-character budget. Follow-ups use the text history; older snapshots are not sent again. **Export Session** saves the transcript, the conversation and your notes as text. **New Session** clears them. Preferences persist on your computer. Your background is encrypted with the OS key store when one is available; otherwise it stays in memory. The speech model and the Codex sign-in are stored separately and never ship with the source or the installers.
 
@@ -92,13 +103,13 @@ npm run package:win # x64 NSIS EXE, on Windows
 
 The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.html` is a hidden window that owns microphone and Windows call-audio capture. `src/main.cjs` runs the menu-bar icon, shortcuts, notch placement and screen-sharing protection; `src/tray-menu.cjs` builds the menu.
 
-`npm run verify` checks that Buddy is the only visible window, the engine stays hidden, there is no Dock icon, the menu-bar icon exists, and protection, focus hand-off, notch placement, notes, background, paste and English text all work. It saves screenshots of Buddy’s states in `validation/` using synthetic data; no account request is made.
+`npm run verify` checks that Buddy is the only visible window, the engine stays hidden, there is no Dock icon, the menu-bar icon exists, and protection, focus hand-off, notch placement, floating and snapping back, the access step, notes, background, paste and English text all work. It saves screenshots of Buddy’s states in `validation/` using synthetic data; no account request is made.
 
 To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
 
-The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test --audio-test` on the installed app. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
+The release workflows build the DMG and the EXE, then run `--verify --interview-test` on the packaged app (the EXE after a silent install). It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 
-Installers are not signed with a publisher certificate; the Mac bundle is ad-hoc signed. Gatekeeper and SmartScreen may ask you to confirm opening it. There is no auto-update.
+Installers are not signed with a publisher certificate; the Mac bundle is ad-hoc signed. Gatekeeper and SmartScreen may ask you to confirm opening it; `install.sh` removes the download quarantine so the app opens directly. macOS keys permissions to the signature, so after an update it may ask for microphone and screen access again. There is no auto-update; run the install line again to update.
 
 ## Sources and licenses
 

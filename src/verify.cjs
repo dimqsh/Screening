@@ -8,6 +8,7 @@ const {
   screen,
   desktopCapturer,
 } = require("electron");
+const { FLOAT } = require("./services/notch.cjs");
 
 const QUESTION = "Tell me about a time you disagreed with your manager.";
 const STAR_ANSWER =
@@ -35,6 +36,8 @@ module.exports = async function verify(ctx) {
     audio,
     runCapture,
     permission,
+    setDock,
+    access,
     delay,
   } = ctx;
   const has = (flag) => process.argv.includes(flag);
@@ -52,7 +55,13 @@ module.exports = async function verify(ctx) {
     fn();
     checks.push({ name, passed: true });
   }
-  const js = (code) => buddy.webContents.executeJavaScript(code);
+  // A failing script names itself and the renderer errors so far.
+  const js = (code) =>
+    buddy.webContents.executeJavaScript(code).catch((error) => {
+      throw new Error(
+        `${error.message}\n${code.slice(0, 160)}\n${scriptErrors.join("\n")}`,
+      );
+    });
   const click = (id) => js(`document.getElementById(${JSON.stringify(id)}).click()`);
   async function until(test, timeout = 20000, message = "Timed out") {
     const started = Date.now();
@@ -70,6 +79,10 @@ module.exports = async function verify(ctx) {
     js(`(() => { const island = document.getElementById("island");
       return { mode: island.dataset.mode, open: island.classList.contains("open"),
         glance: island.classList.contains("glance"),
+        floating: island.classList.contains("floating"),
+        compact: island.classList.contains("compact"),
+        accessStep: !document.getElementById("step-access").hidden,
+        accessDone: document.getElementById("step-access").classList.contains("done"),
         manual: island.dataset.hover === "true" || island.dataset.pinned === "true",
         view: document.querySelector(".view.active")?.id,
         answer: document.getElementById("answer").textContent,
@@ -198,16 +211,35 @@ module.exports = async function verify(ctx) {
     { id: 2, text: QUESTION, time: now() },
   ];
   const pin = `document.getElementById("orb").click()`;
+  // A fresh install asks for microphone and screen access in setup, once.
+  const firstRun = access();
+  if (firstRun) {
+    const missing =
+      firstRun.microphone !== "granted" || firstRun.screen !== "granted";
+    const ready = await scene(null, { messages: [], transcript: [] });
+    check("A fresh install asks for missing microphone or screen access", () =>
+      assert.equal(ready.mode === "setup", missing),
+    );
+  }
+  await interview.request("setting", { key: "accessPrompted", value: true });
+  publish();
+  await delay(200);
   const setup = await scene(
     "setup",
     { ready: false, connected: false, messages: [], transcript: [] },
     pin,
   );
   await js(pin);
-  check("Setup walks through the speech model and ChatGPT", () => {
+  check("Setup walks through the speech model, ChatGPT and access", () => {
     assert.equal(setup.mode, "setup");
     assert.equal(setup.view, "view-setup");
     assert.equal(setup.open, true);
+    assert.equal(setup.accessStep, Boolean(firstRun));
+    if (firstRun)
+      assert.equal(
+        setup.accessDone,
+        firstRun.microphone === "granted" && firstRun.screen === "granted",
+      );
   });
   await click("dismiss");
   const idle = await scene("idle", { messages: [], transcript: [], recording: false });
@@ -309,6 +341,45 @@ module.exports = async function verify(ctx) {
   check("Buddy closes when the answer is gone", () =>
     assert.equal(after.open, after.manual),
   );
+
+  // Floating: Buddy leaves the notch for a small window, then snaps back.
+  await setDock("float");
+  const floating = await scene(
+    "floating",
+    {
+      transcript: heard,
+      messages: [
+        { id: 9201, role: "user", text: QUESTION },
+        { id: 9202, role: "assistant", status: "done", text: STAR_ANSWER },
+      ],
+    },
+    pin,
+  );
+  await js(pin);
+  const floatBounds = buddy.getBounds();
+  check("Buddy floats off the notch as a small compact window", () => {
+    const area = screen.getPrimaryDisplay().workArea;
+    assert.equal(floatBounds.width, Math.min(FLOAT.width, area.width));
+    assert.ok(floatBounds.x >= area.x);
+    assert.ok(floatBounds.x + floatBounds.width <= area.x + area.width);
+    assert.ok(floatBounds.y >= area.y);
+    assert.equal(layout().floating, true);
+    assert.equal(floating.floating, true);
+    assert.equal(floating.compact, true);
+    assert.equal(floating.open, true);
+    assert.match(floating.answer, /SQS/);
+  });
+  await setDock("notch");
+  await delay(250);
+  const snapped = await probe();
+  check("Buddy snaps back to the notch", () => {
+    const display = screen.getPrimaryDisplay();
+    const bounds = buddy.getBounds();
+    assert.equal(bounds.y, display.bounds.y);
+    assert.equal(layout().floating, false);
+    assert.equal(snapped.floating, false);
+    assert.equal(interview.state.settings.dock, "notch");
+  });
 
   // Typing: Buddy takes the keyboard only while a text field is in use. The
   // composer exists only after setup, so these checks run in a ready state.
@@ -549,9 +620,9 @@ module.exports = async function verify(ctx) {
       await interview.request("setting", { key: "interviewType", value: "coding" });
       async function send(question) {
         const before = interview.state.messages.length;
-        await js(`const input = document.getElementById("question-input");
-          input.value = ${JSON.stringify(question)};
-          document.getElementById("composer").requestSubmit();`);
+        await js(`(() => { const field = document.getElementById("question-input");
+          field.value = ${JSON.stringify(question)};
+          document.getElementById("composer").requestSubmit(); })()`);
         await until(
           () =>
             interview.state.messages.length === before + 2 && !interview.state.ai.busy,

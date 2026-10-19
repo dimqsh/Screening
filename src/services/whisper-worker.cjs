@@ -1,4 +1,16 @@
-const { parentPort, workerData } = require("node:worker_threads");
+// Runs as an Electron utility process in the app (its own process, at a lower
+// CPU priority) or as a worker thread. Both talk through the same small port.
+const threads = require("node:worker_threads");
+const utility = process.parentPort;
+const port = utility
+  ? {
+      postMessage: (message) => utility.postMessage(message),
+      on: (_event, listener) => utility.on("message", (event) => listener(event.data)),
+    }
+  : threads.parentPort;
+const workerData = utility
+  ? JSON.parse(process.argv[process.argv.length - 1])
+  : threads.workerData;
 const os = require("node:os");
 const { SpeechGate } = require("./speech-gate.cjs");
 const { SPEECH_MODEL } = require("./speech-model.cjs");
@@ -28,7 +40,7 @@ async function load() {
       progress_callback: (data) => {
         if (Date.now() - last > 150 || data.status === "ready") {
           last = Date.now();
-          parentPort.postMessage({
+          port.postMessage({
             type: "progress",
             status: data.status,
             file: data.file,
@@ -39,11 +51,11 @@ async function load() {
     },
   );
   await speechGate.load();
-  parentPort.postMessage({ type: "ready" });
+  port.postMessage({ type: "ready" });
   return recognizer;
 }
 let queue = Promise.resolve();
-parentPort.on("message", (data) => {
+port.on("message", (data) => {
   queue = queue.then(async () => {
     try {
       const model = await load();
@@ -52,11 +64,11 @@ parentPort.on("message", (data) => {
       let energy = 0;
       for (const s of samples) energy += s * s;
       if (Math.sqrt(energy / samples.length) < 0.0025) {
-        parentPort.postMessage({ type: "text", id: data.id, text: "" });
+        port.postMessage({ type: "text", id: data.id, text: "" });
         return;
       }
       if (!(await speechGate.hasSpeech(samples))) {
-        parentPort.postMessage({ type: "text", id: data.id, text: "" });
+        port.postMessage({ type: "text", id: data.id, text: "" });
         return;
       }
       // The encoder is the expensive part, so it runs once per chunk and its
@@ -93,7 +105,7 @@ parentPort.on("message", (data) => {
         ? Math.exp(logits.data[offset + noSpeechId] - maximum) / sum
         : 0;
       if (noSpeechProbability > 0.6) {
-        parentPort.postMessage({ type: "text", id: data.id, text: "" });
+        port.postMessage({ type: "text", id: data.id, text: "" });
         return;
       }
       let language = data.language;
@@ -119,9 +131,9 @@ parentPort.on("message", (data) => {
       const [text] = model.tokenizer.batch_decode(ids, {
         skip_special_tokens: true,
       });
-      parentPort.postMessage({ type: "text", id: data.id, text: text.trim() });
+      port.postMessage({ type: "text", id: data.id, text: text.trim() });
     } catch (e) {
-      parentPort.postMessage({ type: "error", id: data.id, error: e.message });
+      port.postMessage({ type: "error", id: data.id, error: e.message });
     }
   });
 });

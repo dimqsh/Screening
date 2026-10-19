@@ -31,6 +31,7 @@ async function createInterview(
     getNotes = () => "",
     onLevel = () => {},
     onDraft = () => {},
+    createSpeechWorker,
   } = {},
 ) {
   // English by default for new installs; saved choices from older versions win.
@@ -45,6 +46,9 @@ async function createInterview(
     includeNotes: false,
     source: "system",
     speechModel: defaultModelKey(),
+    dock: "notch",
+    position: null,
+    accessPrompted: false,
   };
   const location = path.join(app.getPath("userData"), "settings.json");
   try {
@@ -59,6 +63,9 @@ async function createInterview(
       "includeNotes",
       "source",
       "speechModel",
+      "dock",
+      "position",
+      "accessPrompted",
     ])
       if (validSetting(k, saved[k])) settings[k] = saved[k];
     if (saved.contextEncrypted && safeStorage.isEncryptionAvailable())
@@ -129,6 +136,7 @@ async function createInterview(
     },
     onLevel,
     speechModel(settings.speechModel),
+    { createWorker: createSpeechWorker },
   );
   state.whisper = whisper.state;
   // A model already on disk counts as ready; it loads into memory on first use.
@@ -164,7 +172,16 @@ async function createInterview(
       return LANGUAGE_CODES.includes(value);
     if (key === "source") return ["system", "microphone"].includes(value);
     if (key === "speechModel") return Object.hasOwn(SPEECH_MODELS, value);
-    if (["autoAnswer", "notesEnabled", "includeNotes"].includes(key))
+    if (key === "dock") return ["notch", "float"].includes(value);
+    if (key === "position")
+      return (
+        value !== null &&
+        typeof value === "object" &&
+        [value.x, value.y].every(
+          (n) => Number.isFinite(n) && Math.abs(n) < 100000,
+        )
+      );
+    if (["autoAnswer", "notesEnabled", "includeNotes", "accessPrompted"].includes(key))
       return typeof value === "boolean";
     if (key === "interviewType")
       return [

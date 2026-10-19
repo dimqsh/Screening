@@ -31,6 +31,7 @@
       protection: snapshot?.protection !== false,
       needsWhisper: false,
       needsAccount: false,
+      needsAccess: false,
       modelLoading: interview?.whisper?.status === "loading",
       modelProgress: interview?.whisper?.progress ?? null,
       signingIn: interview?.ai?.status === "signing-in",
@@ -39,8 +40,15 @@
     if (!snapshot?.buddy?.enabled) return { ...view, mode: "off" };
     const needsWhisper = !interview?.whisper?.ready;
     const needsAccount = !interview?.ai?.connected;
-    if (needsWhisper || needsAccount)
-      return { ...view, mode: "setup", needsWhisper, needsAccount };
+    // Asked once on first run; after that, typing works even without access.
+    const access = snapshot.permissions;
+    const needsAccess = Boolean(
+      access &&
+        !interview?.settings?.accessPrompted &&
+        (access.microphone !== "granted" || access.screen !== "granted"),
+    );
+    if (needsWhisper || needsAccount || needsAccess)
+      return { ...view, mode: "setup", needsWhisper, needsAccount, needsAccess };
 
     const messages = interview.messages || [];
     let index = messages.length - 1;

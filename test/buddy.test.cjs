@@ -4,6 +4,7 @@ const {
   parseNotch,
   estimateNotch,
   islandLayout,
+  floatingLayout,
 } = require("../src/services/notch.cjs");
 const {
   deriveBuddy,
@@ -385,10 +386,14 @@ test("the speech model is multilingual and says how big its download is", () => 
   assert.equal(modelFiles("/c").length, 2);
 });
 
-test("Apple Silicon defaults to the accurate model, other computers to the fast one", () => {
-  assert.equal(defaultModelKey("darwin", "arm64"), "accurate");
-  assert.equal(defaultModelKey("darwin", "x64"), "fast");
-  assert.equal(defaultModelKey("win32", "x64"), "fast");
+test("Apple Silicon with 16 GB or more defaults to the accurate model", () => {
+  const GB = 1024 ** 3;
+  assert.equal(defaultModelKey("darwin", "arm64", 16 * GB), "accurate");
+  assert.equal(defaultModelKey("darwin", "arm64", 18 * GB), "accurate");
+  // The accurate model holds about 2.4 GB while listening; on 8 GB it swaps.
+  assert.equal(defaultModelKey("darwin", "arm64", 8 * GB), "fast");
+  assert.equal(defaultModelKey("darwin", "x64", 32 * GB), "fast");
+  assert.equal(defaultModelKey("win32", "x64", 32 * GB), "fast");
   assert.ok(SPEECH_MODELS.accurate.downloadMB > SPEECH_MODELS.fast.downloadMB);
   assert.equal(speechModel("fast"), SPEECH_MODELS.fast);
   assert.equal(speechModel("nonsense"), speechModel(defaultModelKey()));
@@ -622,4 +627,68 @@ test("Buddy's activity shows listen, hear and answer with the current step lit",
   assert.equal(thinking[2].text, "Thinking…");
   assert.equal(thinking.find((row) => row.active).key, "answer");
   assert.equal(thinking.filter((row) => row.active).length, 1);
+});
+
+test("a floating Buddy starts at the top right and stays fully on screen", () => {
+  const display = {
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    workArea: { x: 0, y: 37, width: 1512, height: 945 },
+  };
+  const first = floatingLayout({ display });
+  assert.equal(first.window.width, 520);
+  assert.equal(first.window.y, 37 + 24);
+  assert.equal(first.window.x + first.window.width, 1512 - 24);
+  assert.equal(first.layout.floating, true);
+  assert.equal(first.layout.compact, true);
+  assert.equal(first.layout.hasNotch, false);
+  const placed = floatingLayout({ display, position: { x: 300, y: 200 } });
+  assert.deepEqual([placed.window.x, placed.window.y], [300, 200]);
+  const offscreen = floatingLayout({ display, position: { x: 5000, y: -400 } });
+  assert.equal(offscreen.window.x, 1512 - offscreen.window.width);
+  assert.equal(offscreen.window.y, 37);
+});
+test("narrow screens use the compact layout at the notch too", () => {
+  const wide = islandLayout({ display: notched, notch: { hasNotch: true, x: 666, width: 180, height: 32 } });
+  assert.equal(wide.layout.compact, false);
+  const small = islandLayout({
+    display: { ...plain, bounds: { x: 0, y: 0, width: 1280, height: 800 }, workArea: { x: 0, y: 25, width: 1280, height: 775 } },
+    notch: { hasNotch: false },
+  });
+  assert.equal(small.layout.compact, true);
+});
+test("menu offers floating Buddy and snapping it back", () => {
+  const docked = trayMenu(menuState(), "darwin");
+  assert.equal(findItem(docked, "toggle-dock").label, "Float Buddy");
+  const floating = trayMenu(menuState({ interview: { settings: { dock: "float" } } }), "darwin");
+  assert.equal(findItem(floating, "toggle-dock").label, "Snap Buddy to the Notch");
+});
+
+test("first run asks once for microphone and screen access", () => {
+  const missing = snapshot({ permissions: { microphone: "not-determined", screen: "denied" } });
+  const view = deriveBuddy(missing);
+  assert.equal(view.mode, "setup");
+  assert.equal(view.needsAccess, true);
+  assert.equal(view.needsWhisper, false);
+  const asked = snapshot({
+    permissions: { microphone: "denied", screen: "denied" },
+    interview: { settings: { accessPrompted: true } },
+  });
+  assert.equal(deriveBuddy(asked).mode, "idle");
+  const granted = snapshot({ permissions: { microphone: "granted", screen: "granted" } });
+  assert.equal(deriveBuddy(granted).mode, "idle");
+  assert.equal(deriveBuddy(snapshot()).needsAccess, false);
+});
+
+test("menu offers access while the microphone or screen is not allowed", () => {
+  const missing = trayMenu(
+    menuState({ permissions: { microphone: "granted", screen: "denied" } }),
+    "darwin",
+  );
+  assert.equal(findItem(missing, "allow-access").label, "Allow Microphone and Screen…");
+  const granted = trayMenu(
+    menuState({ permissions: { microphone: "granted", screen: "granted" } }),
+    "darwin",
+  );
+  assert.equal(findItem(granted, "allow-access"), null);
+  assert.equal(findItem(trayMenu(menuState(), "win32"), "allow-access"), null);
 });

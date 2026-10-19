@@ -131,6 +131,10 @@ function trayMenu(snapshot, platform = process.platform) {
       label: snapshot.buddyVisible ? "Hide Buddy" : "Show Buddy",
       accelerator: KEYS.buddy,
     },
+    {
+      id: "toggle-dock",
+      label: settings.dock === "float" ? "Snap Buddy to the Notch" : "Float Buddy",
+    },
     { type: "separator" },
     { label: "Interview Type", submenu: radio("interviewType", INTERVIEW_TYPES) },
     { label: "Answer Length", submenu: radio("style", ANSWER_LENGTHS) },
@@ -185,6 +189,11 @@ function trayMenu(snapshot, platform = process.platform) {
       enabled: !snapshot.testing,
     },
     { type: "separator" },
+    ...(snapshot.permissions &&
+    (snapshot.permissions.microphone !== "granted" ||
+      snapshot.permissions.screen !== "granted")
+      ? [{ id: "allow-access", label: "Allow Microphone and Screen…" }]
+      : []),
     modelItem(interview.whisper),
     ...accountItems(interview.ai),
     { type: "separator" },

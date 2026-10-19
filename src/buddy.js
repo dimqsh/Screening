@@ -134,8 +134,15 @@ function isOpen() {
   const auto = seenTurn !== mutedTurn && now < autoUntil;
   return manual() || auto || now < flash.until;
 }
+let morphTimer = null;
 function layout() {
   const open = isOpen();
+  // Only opening and closing animate the height; content changes do not.
+  if (open !== island.classList.contains("open")) {
+    island.classList.add("morph");
+    clearTimeout(morphTimer);
+    morphTimer = setTimeout(() => island.classList.remove("morph"), 480);
+  }
   island.classList.toggle("open", open);
   island.classList.toggle(
     "glance",
@@ -336,6 +343,22 @@ function renderSetup() {
         ? "Finish signing in in your browser, then come back."
         : "Answers come from your ChatGPT plan. Sign in once in your browser.",
   );
+  const access = current.permissions;
+  show($("step-access"), Boolean(access));
+  if (access) {
+    const allowed =
+      access.microphone === "granted" && access.screen === "granted";
+    $("step-access").classList.toggle("done", allowed);
+    show($("access"), !allowed);
+    prop($("access"), "disabled", askingAccess);
+    setText($("access"), askingAccess ? "Waiting…" : "Allow");
+    setText(
+      $("access-text"),
+      allowed
+        ? "Allowed. I can hear the call and read the screen."
+        : "Lets me hear the call and read the screen when you ask. macOS asks once.",
+    );
+  }
   keys($("setup-keys"));
 }
 
@@ -354,6 +377,8 @@ function render(snapshot) {
     setVar(island, "--notch-h", `${geometry.notchHeight}px`);
     setVar(island, "--notch-left", `${geometry.notchLeft}px`);
     island.classList.toggle("notched", geometry.hasNotch);
+    island.classList.toggle("floating", Boolean(geometry.floating));
+    island.classList.toggle("compact", Boolean(geometry.compact));
   }
 
   view = deriveBuddy(snapshot, { dismissedId });
@@ -484,7 +509,7 @@ function setLevel(value) {
   bars.forEach((bar, i) => {
     const jitter = value > 0.01 ? 0.75 + Math.random() * 0.5 : 1;
     const height = 3 + Math.min(11, value * 16 * BAR_GAIN[i] * jitter);
-    bar.style.height = `${height.toFixed(1)}px`;
+    bar.style.transform = `scaleY(${(height / 14).toFixed(3)})`;
   });
 }
 api.onLevel((value) => {
@@ -558,6 +583,27 @@ document.addEventListener("pointerdown", (event) => {
   const field = event.target.closest?.(FIELDS);
   if (field) startTyping(field);
 });
+
+// Drag Buddy by its top bar to move it off the notch, or anywhere.
+const HANDLES = ".bar, .topbar";
+let dragging = false;
+document.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  const handle = event.target.closest?.(HANDLES);
+  if (!handle || event.target.closest("button, nav, input, textarea")) return;
+  dragging = true;
+  island.classList.add("dragging");
+  handle.setPointerCapture(event.pointerId);
+  api.drag("start");
+});
+function stopDragging() {
+  if (!dragging) return;
+  dragging = false;
+  island.classList.remove("dragging");
+  api.drag("end");
+}
+document.addEventListener("pointerup", stopDragging);
+document.addEventListener("lostpointercapture", stopDragging);
 document.addEventListener("focusout", () =>
   setTimeout(() => {
     if (!document.activeElement?.matches?.(FIELDS)) stopTyping();
@@ -657,6 +703,15 @@ $("model").addEventListener(
   "click",
   safe(() => api.request("model")),
 );
+let askingAccess = false;
+$("access").addEventListener("click", () => {
+  askingAccess = true;
+  renderSetup();
+  safe(() => api.request("allow-access"))().finally(() => {
+    askingAccess = false;
+    if (current) renderSetup();
+  });
+});
 $("login").addEventListener(
   "click",
   safe(() => api.request("login")),
@@ -863,7 +918,18 @@ document.addEventListener("mouseleave", () => look(null));
 setInterval(() => {
   if (current) render(current);
 }, 1000);
-api.subscribe(render);
+// Streaming answers send bursts of updates; draw at most once per frame.
+let pending = null;
+api.subscribe((snapshot) => {
+  const first = pending === null;
+  pending = snapshot;
+  if (first)
+    requestAnimationFrame(() => {
+      const next = pending;
+      pending = null;
+      render(next);
+    });
+});
 api
   .state()
   .then(render)

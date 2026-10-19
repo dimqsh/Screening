@@ -31,6 +31,9 @@
       protection: snapshot?.protection !== false,
       needsWhisper: false,
       needsAccount: false,
+      modelLoading: interview?.whisper?.status === "loading",
+      modelProgress: interview?.whisper?.progress ?? null,
+      signingIn: interview?.ai?.status === "signing-in",
     };
     if (!snapshot?.buddy?.enabled) return { ...view, mode: "off" };
     const needsWhisper = !interview?.whisper?.ready;
@@ -66,5 +69,26 @@
     return { ...view, mode: recording ? "listening" : "idle" };
   }
 
-  return { deriveBuddy, formatElapsed };
+  // Pairs each question with the answer that followed it, oldest first.
+  function listTurns(messages = []) {
+    const turns = [];
+    let question = null;
+    for (const message of messages) {
+      if (message.role === "user") question = message;
+      else if (message.role === "assistant") {
+        turns.push({
+          id: message.id,
+          question: question?.text || "",
+          attachment: question?.attachment?.name || "",
+          answer: message.text || "",
+          status: message.status || "done",
+          error: message.error || "",
+        });
+        question = null;
+      }
+    }
+    return turns;
+  }
+
+  return { deriveBuddy, formatElapsed, listTurns };
 });

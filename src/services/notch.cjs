@@ -1,7 +1,7 @@
 // Notch geometry for the Buddy island. Pure functions, tested without Electron.
 const ESTIMATE = { width: 180, height: 32 };
 const NOTCH_MENU_BAR = 30;
-const WINDOW = { width: 620, height: 460 };
+const WINDOW = { width: 760, height: 660 };
 const PILL_HEIGHT = 30;
 const finite = (n) => typeof n === "number" && Number.isFinite(n);
 

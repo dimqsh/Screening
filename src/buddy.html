@@ -22,18 +22,23 @@
       <symbol id="b-close" viewBox="0 0 24 24">
         <path d="m6 6 12 12M18 6 6 18" />
       </symbol>
-      <symbol id="b-open" viewBox="0 0 24 24">
-        <path d="M14 4h6v6M20 4l-8 8" />
-        <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+      <symbol id="b-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" /></symbol>
+      <symbol id="b-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" /></symbol>
+      <symbol id="b-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></symbol>
+      <symbol id="b-window" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2.5" />
+        <path d="M3 9h18" />
+        <circle cx="6.5" cy="6.5" r=".6" />
+        <circle cx="9" cy="6.5" r=".6" />
+      </symbol>
+      <symbol id="b-paste" viewBox="0 0 24 24">
+        <rect x="5" y="4" width="14" height="17" rx="2.5" />
+        <path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3" />
       </symbol>
       <symbol id="b-spark" viewBox="0 0 24 24">
         <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" />
       </symbol>
-      <symbol id="b-eye-off" viewBox="0 0 24 24">
-        <path d="M3 3l18 18" />
-        <path d="M10.6 5.1A10 10 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3 3.8M6.6 6.6A17 17 0 0 0 2.5 12S6 19 12 19a9.6 9.6 0 0 0 4.4-1" />
-        <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
-      </symbol>
+      <symbol id="b-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></symbol>
     </svg>
 
     <div id="island" class="island" data-mode="setup">
@@ -59,10 +64,19 @@
         </div>
 
         <section id="panel" class="panel">
-          <header class="panel-head">
-            <span id="title" class="panel-title"></span>
-            <span id="meta" class="panel-meta"></span>
-            <div class="panel-tools">
+          <header class="head">
+            <div class="status">
+              <span id="title" class="title"></span>
+              <span id="meta" class="meta"></span>
+            </div>
+            <div class="controls">
+              <div id="source" class="segmented" role="radiogroup" aria-label="Audio source">
+                <button class="seg" type="button" role="radio" data-source="system">Call audio</button
+                ><button class="seg" type="button" role="radio" data-source="microphone">Microphone</button>
+              </div>
+              <button id="listen" class="listen" type="button">
+                <span class="listen-dot" aria-hidden="true"></span><span id="listen-label">Listen</span>
+              </button>
               <button id="pin" class="tool" type="button" aria-pressed="false">
                 <svg><use href="#b-pin" /></svg>
               </button>
@@ -71,31 +85,147 @@
               </button>
             </div>
           </header>
-          <p id="question" class="question"></p>
-          <div id="shimmer" class="shimmer" aria-hidden="true">
-            <i></i><i></i><i></i>
+
+          <nav id="tabs" class="tabs" role="tablist" aria-label="Buddy">
+            <button class="tab" type="button" role="tab" data-tab="answer">Answer</button
+            ><button class="tab" type="button" role="tab" data-tab="transcript">Transcript</button
+            ><button class="tab" type="button" role="tab" data-tab="notes">Notes</button
+            ><button class="tab" type="button" role="tab" data-tab="you">You</button>
+            <button id="new-session" class="link" type="button">New session</button>
+          </nav>
+
+          <div class="views">
+            <section id="view-setup" class="view">
+              <h2 class="setup-title">Let’s get you ready</h2>
+              <p class="setup-lead">
+                Two one-time steps. Then Buddy listens to the call and answers
+                right under your camera.
+              </p>
+              <ol class="steps">
+                <li id="step-model" class="step">
+                  <span class="step-mark"><span>1</span><svg><use href="#b-check" /></svg></span>
+                  <div class="step-body">
+                    <strong>Speech model</strong>
+                    <p id="model-text">Turns the call into text on this computer. One download.</p>
+                    <div id="model-progress" class="progress" hidden><i></i></div>
+                  </div>
+                  <button id="model" class="action primary" type="button">Download</button>
+                </li>
+                <li id="step-account" class="step">
+                  <span class="step-mark"><span>2</span><svg><use href="#b-check" /></svg></span>
+                  <div class="step-body">
+                    <strong>ChatGPT</strong>
+                    <p id="account-text">Answers come from your ChatGPT plan. Sign in once in your browser.</p>
+                  </div>
+                  <button id="login" class="action primary" type="button">Sign in</button>
+                </li>
+              </ol>
+              <p class="keys" id="setup-keys"></p>
+            </section>
+
+            <section id="view-answer" class="view">
+              <div id="empty" class="empty">
+                <p class="empty-title">Ask anything.</p>
+                <p id="empty-text" class="empty-text"></p>
+              </div>
+              <p id="question" class="question"></p>
+              <div id="shimmer" class="shimmer" aria-hidden="true"><i></i><i></i><i></i></div>
+              <div id="answer" class="reading"></div>
+              <footer id="answer-foot" class="answer-foot">
+                <div id="turns" class="turns">
+                  <button id="prev" class="tool" type="button" aria-label="Previous answer">
+                    <svg><use href="#b-left" /></svg></button
+                  ><span id="turn-count"></span
+                  ><button id="next" class="tool" type="button" aria-label="Next answer">
+                    <svg><use href="#b-right" /></svg>
+                  </button>
+                </div>
+                <button id="copy" class="action" type="button">
+                  <svg><use href="#b-copy" /></svg><span id="copy-label">Copy</span>
+                </button>
+              </footer>
+            </section>
+
+            <section id="view-transcript" class="view">
+              <div id="transcript" class="transcript"></div>
+              <footer class="view-foot">
+                <span class="hint">New lines arrive about every 8 seconds.</span>
+                <button id="answer-now" class="action primary" type="button">
+                  <svg><use href="#b-spark" /></svg>Answer what was just said
+                </button>
+              </footer>
+            </section>
+
+            <section id="view-notes" class="view">
+              <textarea
+                id="notes"
+                class="field"
+                maxlength="12000"
+                aria-label="Notes"
+                placeholder="Talking points, questions to ask, numbers to remember…"
+              ></textarea>
+              <footer class="view-foot">
+                <label class="switch-row"
+                  ><input id="includeNotes" type="checkbox" role="switch" /><span
+                    >Use notes in answers</span
+                  ></label
+                >
+                <span class="hint">Notes stay in memory until you quit.</span>
+              </footer>
+            </section>
+
+            <section id="view-you" class="view">
+              <textarea
+                id="context"
+                class="field"
+                maxlength="16000"
+                aria-label="Your background"
+                placeholder="The role you’re interviewing for, your skills, and real projects with numbers. Buddy uses only what you write here and never makes up achievements."
+              ></textarea>
+              <footer class="view-foot">
+                <span id="context-status" class="hint">Encrypted on this computer when you save.</span>
+                <button id="save-context" class="action primary" type="button">Save</button>
+              </footer>
+            </section>
+
+            <section id="view-picker" class="view">
+              <header class="picker-head">
+                <div>
+                  <strong>Snapshot a window</strong>
+                  <p class="hint">Buddy takes one image and sends it with your next message.</p>
+                </div>
+                <button id="close-picker" class="action" type="button">Cancel</button>
+              </header>
+              <div id="window-list" class="window-list"></div>
+              <p id="picker-status" class="hint"></p>
+            </section>
           </div>
-          <div id="answer" class="reading"></div>
-          <div id="heard" class="heard">
-            <span id="heard-label" class="eyebrow"></span>
-            <p id="heard-text"></p>
-          </div>
-          <p id="detail" class="detail"></p>
-          <footer class="actions">
-            <button id="answer-now" class="action primary" type="button">
-              <svg><use href="#b-spark" /></svg><span id="answer-now-label"></span>
-            </button>
-            <button id="copy" class="action" type="button">
-              <svg><use href="#b-copy" /></svg><span id="copy-label"></span>
-            </button>
-            <button id="open-app" class="action" type="button">
-              <svg><use href="#b-open" /></svg><span id="open-label"></span>
-            </button>
-            <button id="hide-buddy" class="action quiet" type="button">
-              <svg><use href="#b-eye-off" /></svg><span id="hide-label"></span>
-            </button>
-          </footer>
-          <p id="keys" class="keys"></p>
+
+          <form id="composer" class="composer">
+            <div id="attachment" class="attachment" hidden>
+              <img id="attachment-image" alt="" /><span id="attachment-name"></span
+              ><button id="remove-attachment" class="tool" type="button" aria-label="Remove snapshot">
+                <svg><use href="#b-close" /></svg>
+              </button>
+            </div>
+            <div class="composer-row">
+              <textarea
+                id="question-input"
+                rows="1"
+                maxlength="16000"
+                aria-label="Ask Buddy"
+                placeholder="Ask anything, or paste a coding task…"
+              ></textarea>
+              <button id="snapshot" class="tool" type="button" title="Snapshot a window" aria-label="Snapshot a window">
+                <svg><use href="#b-window" /></svg></button
+              ><button id="paste" class="tool" type="button" title="Paste" aria-label="Paste">
+                <svg><use href="#b-paste" /></svg></button
+              ><button id="send" class="send" type="submit" title="Send" aria-label="Send">
+                <svg><use href="#b-up" /></svg>
+              </button>
+            </div>
+          </form>
+          <p id="toast" class="toast" role="alert" hidden></p>
         </section>
       </div>
     </div>
@@ -107,7 +237,6 @@
       <p>Magenta marker = window captured</p>
     </div>
 
-    <script src="i18n.js"></script>
     <script src="buddy-model.js"></script>
     <script src="buddy.js"></script>
   </body>

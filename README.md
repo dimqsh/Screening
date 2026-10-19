@@ -1,90 +1,109 @@
 # Screening
 
-Desktop interview chat for macOS and Windows. Local multilingual Whisper, answers through your ChatGPT account, window snapshots, optional notes, and a compact floating view. Formerly Capture Lab; the application ID and local data folder stay the same for upgrades.
+Interview answers at your MacBook notch, right under your camera. Screening listens to the call, transcribes it on your Mac with Whisper, and drafts answers through your ChatGPT account. Everything happens in **Buddy**, a black island that grows out of the notch. When you read from Buddy, you are looking almost straight at the camera.
 
-<img src="assets/workspace.png" width="540" alt="Screening compact workspace" />
+There are no other windows. A small island icon in the menu bar is the way in.
 
-## Use
+<img src="assets/buddy.png" width="640" alt="Buddy at the notch, showing an answer under the camera" />
 
-1. Install the DMG (Apple Silicon) or EXE (Windows x64) from this repository’s Releases.
-2. Open **Settings → Sign in with ChatGPT**. The bundled official Codex CLI opens a browser. An existing Codex ChatGPT sign-in is reused. Plan eligibility, model availability and account limits apply; this does not turn a ChatGPT subscription into an OpenAI API key.
-3. Select **Set up Whisper**. The first run downloads the multilingual `onnx-community/whisper-base` q8 model (about 75 MB of weights plus small tokenizer files). Later transcription runs locally without an internet connection. The model loads again when the app starts.
-4. Choose **System audio** for the interviewer’s voice, or **Microphone** for your own voice. Grant the requested operating-system audio/screen permissions, then start recording.
-5. Pick an interview type: general, coding, system design, behavioral, case/product, or HR. Type/paste a question and press Cmd/Ctrl+Enter. Ask follow-ups in the same chat. For the recent transcript, use **Send** with an empty composer or Cmd/Ctrl+Shift+Enter. Automatic voice answers are optional. Add real experience in **My context**.
-6. Select **Window snapshot**, choose one window, preview the attachment, then send your message. Each click takes one image; there is no background window tracking. Remove the attachment to discard it. A pending attachment pauses automatic voice answers so it can be reviewed before sending.
-7. In **Notes**, switch notes on/off. **Use in answers** separately controls whether their text goes to ChatGPT. Turning notes off preserves the text for the current session. Copy a message or an individual code block with its copy button. Paste text with the composer button or the usual keyboard shortcut.
-8. The app starts in its compact workspace. It includes recording controls, a live input meter, transcript, chat, notes, text paste, window snapshots and setup. Use the expand button for the larger workspace and candidate context. Closing the large window returns to compact view and keeps the audio/session alive. Use the application menu to quit.
-9. All application windows, including Buddy, request native capture exclusion by default. **Hide both windows** or Cmd/Ctrl+Shift+H removes them from your desktop while audio continues; restore through the Dock/app icon, the menu or the show/recover shortcuts.
+## Get started
 
-## Buddy at the notch
+1. Install the DMG (Apple Silicon) or the EXE (Windows x64) from this repository’s Releases.
+2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with two setup steps.
+3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
+4. **Sign in with ChatGPT.** The bundled official Codex CLI opens your browser. Your ChatGPT plan, model access and limits apply. This does not turn a ChatGPT subscription into an OpenAI API key.
+5. In Buddy, pick **Call audio** for the interviewer’s voice or **Microphone** for yours, then press **Listen**. Allow the audio and screen permissions macOS or Windows asks for.
+6. When the interviewer finishes a question, press Cmd/Ctrl+Shift+Enter. Buddy opens and streams the answer under your camera.
 
-Buddy is a black island at the top edge of the screen, right under the camera. On a MacBook with a notch it grows out of the camera housing; on other displays and on Windows it hangs from the top edge as a small pill. When you read an answer from Buddy, you are looking almost straight at the camera.
+## Buddy
 
-- **Collapsed**, it shows a small orb and a dot for capture protection. While recording, it shows a waveform driven by the input level and the elapsed time.
-- **Open**, it shows the latest answer in large type, streaming as it arrives. It opens by itself when you request an answer and closes a minute after the answer finishes. Hover opens it too; click the orb to keep it open.
-- From Buddy you can answer the recent transcript, copy the answer, or open Screening. Typing stays in the compact window and the workspace.
-- Buddy never takes keyboard focus, so your meeting app keeps it. Outside the island, clicks pass through to the windows below.
-- Buddy uses the same capture protection switch as the other two windows. **Hide both windows** hides Buddy too. Turn Buddy on or off with the **Buddy** chip in either window header, in Settings, or with Cmd/Ctrl+Shift+B.
+- **Collapsed**, Buddy is a small orb next to the notch with a green dot that means screen-sharing protection is on. While listening, it shows a waveform that follows the voice and a timer.
+- **When an answer arrives**, Buddy opens a quiet reading view: the question and the answer in large type, nothing else. It closes a minute after the answer finishes.
+- **Hover** to open the full island; click the orb to keep it open. The full island has the listening controls and four tabs:
+  - **Answer**: the latest answer, earlier answers with the arrows, Copy, and a box to type or paste a question.
+  - **Transcript**: what was heard, with times, and **Answer what was just said**.
+  - **Notes**: talking points. Turn on **Use notes in answers** to send them with your questions.
+  - **You**: your target role, skills and real wins. Buddy uses only what you write here and never makes up achievements.
+- **Snapshot a window** from the question box to send a coding task or a diagram. Buddy takes one image, shows it in the box, and sends it with your next message.
+- Buddy never takes the keyboard on its own, so Zoom, Meet or Teams keeps it. Buddy takes the keyboard only while you type in one of its fields, and gives it back when you send, press Escape or click elsewhere. Outside the island, clicks pass through to the apps below.
+- On Windows, and on Macs without a notch, Buddy hangs from the top edge as a small pill.
 
-On macOS a small helper reads the exact notch rectangle from the system. Without it, Buddy estimates the notch from the menu bar height.
+## The menu-bar menu
 
-Interface languages: Russian, English and Kazakh. Speech and answer selectors include automatic language selection and Russian, English, Kazakh, Spanish, French, German, Chinese, Japanese, Ukrainian and Turkish. Automatic speech language detection uses Whisper’s language-token logits. Language availability does not imply equal recognition accuracy; small models can mishear words, especially in noise and weaker-supported languages.
+Click the island icon in the menu bar for everything else: start or stop listening, answer, ask, show or hide Buddy, interview type, answer length, automatic answers, notes in answers, speech and answer language, **Hide From Screen Sharing**, **Test Screen Sharing Protection**, setup status, **Export Session**, **New Session** and **Quit**. While Screening listens, the icon fills in and the menu bar shows the elapsed time.
 
-Audio is processed in roughly eight-second chunks; the input meter moves before the first transcript arrives. Stop flushes the remaining audio through Whisper. Microphone and Windows loopback streams have one renderer owner; controls in either window address that owner and keep it running while its window is hidden. macOS system capture waits for a native ready acknowledgement before showing a recording state. The local queue is bounded; if the device cannot keep up, the app reports an error instead of growing an unlimited buffer. A bundled Silero detector filters chunks without detected speech before Whisper runs. It does not identify speakers. System audio can include sounds from other applications.
+| Action                       | Shortcut             |
+| ---------------------------- | -------------------- |
+| Answer what was just said    | Cmd/Ctrl+Shift+Enter |
+| Ask Buddy                    | Cmd/Ctrl+Shift+Space |
+| Start or stop listening      | Cmd/Ctrl+Shift+L     |
+| Show or hide Buddy           | Cmd/Ctrl+Shift+B     |
+
+Shortcuts work in every app. Cmd+Shift+B replaces Chrome’s bookmarks-bar shortcut while Screening runs.
+
+## Languages
+
+The interface is in English. Speech and answers default to English. You can pick automatic detection or Spanish, Chinese, French, German, Japanese, Russian, Ukrainian, Kazakh or Turkish in the menu. Automatic detection uses Whisper’s language-token logits.
+
+**Speech Model** in the menu chooses between two multilingual Whisper models. We tested both on one interview question per language, spoken by the macOS voices for English, Russian, Spanish, German, Ukrainian, Kazakh, Chinese, Japanese and Turkish, plus a real English recording, on an M3 Pro:
+
+| Model | Download | Time per 8-second chunk | Words wrong, average | Ukrainian | Kazakh |
+| --- | --- | --- | --- | --- | --- |
+| Accurate: large-v3-turbo, 8-bit encoder | about 1 GB | about 3.5 s | 5% | 9% | 25% |
+| Fast: base, 8-bit | 77 MB | about 0.7 s | 17% | 36% | not recognized |
+
+Synthetic voices are cleaner than a real call, so expect more errors in noise and with strong accents. The Accurate model needs a fast CPU to keep up with live speech, which is why it is the default only on Apple Silicon.
+
+Audio is processed in about eight-second chunks. The waveform moves before the first line arrives. Stop sends the remaining audio through Whisper. A bundled Silero detector skips chunks without speech before Whisper runs; it does not tell speakers apart. Call audio can include sound from other apps. The local queue is bounded: if the computer cannot keep up, Screening reports an error instead of buffering without limit.
 
 ## Account and data
 
-ChatGPT sign-in uses the official, bundled `@openai/codex` CLI. Screening never reads or copies OAuth tokens into its UI. Authentication is shared with the local Codex CLI. Sign-in from this app may change the account used by other Codex clients. The CLI owns its login storage and browser flow.
+ChatGPT sign-in uses the official, bundled `@openai/codex` CLI. Screening never reads or copies OAuth tokens. Authentication is shared with the local Codex CLI, so signing in here may change the account other Codex clients use. The CLI owns its login storage and browser flow.
 
-Whisper receives PCM audio locally. The assistant receives the typed question or the latest four transcript chunks, candidate context, a bounded recent chat history, and notes only when both notes switches are enabled. A selected window image is attached once, with the next manually sent answer request. A temporary PNG is removed after the request or app shutdown. Choosing a window lists local preview thumbnails; previews are not sent to ChatGPT. Capture requires OS screen-recording permission. Nothing monitors the active window or captures it on a timer. Requests use ephemeral, read-only Codex execution, ignore user config/plugins/MCP, and disable shell and web tools. No repository is attached. Assistant requests require internet and consume the signed-in account’s Codex allowance. This is an independent prototype, not an OpenAI product.
+Whisper receives audio on your computer. ChatGPT receives the typed question or the latest four transcript chunks, your background from the **You** tab, a bounded recent conversation, and notes only when **Use notes in answers** is on. A window snapshot is sent once, with the next message. The temporary image file is removed after the request or when Screening quits. Window thumbnails in the picker stay on your computer. Nothing watches the active window or captures it on a timer. Requests use ephemeral, read-only Codex execution, ignore user config, plugins and MCP, and disable shell and web tools. Answers need internet and count against your Codex allowance. Screening is an independent project, not an OpenAI product.
 
-Raw audio, transcripts, chat messages, notes and window images are held in memory, not automatically saved. Chat keeps up to 60 messages and six image previews; model context uses the latest 12 messages within a 24,000-character budget. Follow-ups use text history; older images are not reattached. You can export the transcript, conversation and enabled notes as text. A new conversation clears transcript, messages and pending image. Preferences persist locally. Candidate context is encrypted with Electron safeStorage when the OS key store is available; otherwise it remains in memory. Model files and official CLI authentication persist separately. Credentials and models are never distributed with the source or installers.
+Whisper loads into memory when you start listening, and unloads 90 seconds after you stop or after the last transcription. A loaded model uses about 0.7 GB (Fast) or 2.4 GB (Accurate); an idle Screening uses about 120 MB in total.
 
-## Screen capture
+Audio, transcripts, answers, notes and snapshots stay in memory and are not saved automatically. Buddy keeps up to 60 messages and six snapshots; ChatGPT gets the latest 12 messages within a 24,000-character budget. Follow-ups use the text history; older snapshots are not sent again. **Export Session** saves the transcript, the conversation and your notes as text. **New Session** clears them. Preferences persist on your computer. Your background is encrypted with the OS key store when one is available; otherwise it stays in memory. The speech model and the Codex sign-in are stored separately and never ship with the source or the installers.
 
-Both the compact and large windows request native content protection before they are first shown. The shared protection switch applies to both. Choose the compact or large window for the capture experiment. It displays a synthetic card and compares its magenta marker with protection off and on; a missing unprotected marker is inconclusive. Always check the actual recipient view for your meeting app and recorder.
+## Screen sharing protection
 
-Historical verification: version 0.1.0 was tested with Google Meet entire built-in-screen sharing on macOS 27.0.1 / Chrome 155. Two independently joined connections on the same Mac showed the overlay with protection off and omitted it with protection on. This was not a second physical device. Local regression checks cover Electron desktop capture and Apple ScreenCaptureKit; the historical Meet check does not establish every version or capture path. Version 0.4.0 adds separate local A/B checks for both windows. Version 0.5.0 adds Buddy to the same A/B check; on macOS 27 both the Electron and ScreenCaptureKit paths dropped its marker with protection on. No private meeting screenshots are included in this repository.
+Buddy asks the operating system to leave it out of screen capture before it first appears. **Test Screen Sharing Protection** in the menu shows a synthetic card in Buddy and compares a magenta marker with protection off and on, on each capture path the system offers. A missing unprotected marker counts as inconclusive. Always check what the other person sees in your meeting app.
 
-Native capture exclusion is not a universal bypass. Electron documents that newer macOS ScreenCaptureKit recorders may ignore the flag; Windows also limits the guarantee to supported capture APIs. The app does not bypass OS microphone/screen permissions, application security controls or process inspection. Use the actual recipient view to determine whether a particular capture path respects protection.
+Historical results: version 0.1.0 was tested with Google Meet sharing the whole built-in screen on macOS 27.0.1 and Chrome 155. Two connections joined from the same Mac showed the overlay with protection off and left it out with protection on. That was not a second physical device. Version 0.6.0 ran the A/B check on macOS 27: with protection on, both the Electron and the ScreenCaptureKit paths dropped Buddy’s marker. No private meeting screenshots are included in this repository.
 
-Hotkeys:
-
-| Action                   | Shortcut             |
-| ------------------------ | -------------------- |
-| Show/hide compact window | Cmd/Ctrl+Shift+Space |
-| Hide both windows        | Cmd/Ctrl+Shift+H     |
-| Recover mouse control    | Cmd/Ctrl+Shift+R     |
-| Show workspace           | Cmd/Ctrl+Shift+L     |
-| Show/hide Buddy          | Cmd/Ctrl+Shift+B     |
-| Answer recent transcript | Cmd/Ctrl+Shift+Enter |
+Capture exclusion is not a universal bypass. Electron documents that newer macOS ScreenCaptureKit recorders may ignore the flag, and Windows limits the guarantee to supported capture APIs. Screening does not bypass microphone or screen permissions, app security controls or process inspection.
 
 ## Development
 
-Node.js 22+, npm. Xcode command-line tools are required to compile the three macOS helpers: window capture, system audio and notch geometry.
+Node.js 22+ and npm. Xcode command-line tools compile the three macOS helpers: window capture, call audio and notch geometry.
 
 ```sh
 npm ci
-npm run build:native # macOS; harmless skip on Windows
+npm run build:native # macOS; skipped on Windows
 npm start
 npm test
 npm run verify
-npm run verify:capture # requires screen permission; shows a synthetic marker
+npm run verify:capture # needs screen permission; shows a synthetic marker
 npm run package:mac # Apple Silicon DMG, on macOS
 npm run package:win # x64 NSIS EXE, on Windows
 ```
 
-`npm run verify` exercises native protection flags, recovery, IPC validation, editable notes, renderer isolation and interface language switching. It also checks Buddy's protection, focus, position and visibility switches, and saves screenshots of its idle, listening, thinking and answer states in `validation/`. Those states use synthetic data; no account request is made. To exercise real speech recognition, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:interview`. `--live-ai-test` additionally makes a real account-backed request; it requires ChatGPT sign-in. `--compact-test` exercises compact controls, Unicode paste, hidden-workspace recording, closing the workspace, emergency hide/recovery, input level and final-buffer transcription through a synthetic MediaStream, real AudioWorklet and real Whisper. This is not a physical-microphone test. `--system-audio-test` on macOS expects external speech playback after the native-audio-ready marker; it checks real system audio from compact controls. `--screening-test` checks notes, paste and minimum window layout; combine it with `--vision-test` to capture a synthetic task window through the OS, send its image to ChatGPT, ask a follow-up and verify code copying. This consumes two account-backed requests and needs screen access.
+The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.html` is a hidden window that owns microphone and Windows call-audio capture. `src/main.cjs` runs the menu-bar icon, shortcuts, notch placement and screen-sharing protection; `src/tray-menu.cjs` builds the menu.
 
-The Windows release workflow builds a native Windows installer, installs the EXE and launches the installed application and checks actual Whisper transcription of the public JFK sample. It does not establish a Windows meeting-recipient capture result or test the interactive OAuth flow on a Windows user’s account.
+`npm run verify` checks that Buddy is the only visible window, the engine stays hidden, there is no Dock icon, the menu-bar icon exists, and protection, focus hand-off, notch placement, notes, background, paste and English text all work. It saves screenshots of Buddy’s states in `validation/` using synthetic data; no account request is made.
 
-Installers are currently unsigned by a publisher certificate; the Mac bundle is ad-hoc signed. macOS Gatekeeper and Windows SmartScreen may require an explicit open/install decision. No auto-update service is enabled.
+To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Listen button and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
+
+The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test --audio-test` on the installed app. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
+
+Installers are not signed with a publisher certificate; the Mac bundle is ad-hoc signed. Gatekeeper and SmartScreen may ask you to confirm opening it. There is no auto-update.
 
 ## Sources and licenses
 
 - [OpenAI Codex authentication](https://learn.chatgpt.com/docs/auth) and [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk).
-- [Transformers.js audio processing](https://huggingface.co/docs/transformers.js/guides/node-audio-processing), [Whisper base model](https://huggingface.co/onnx-community/whisper-base), [OpenAI Whisper](https://github.com/openai/whisper), [Silero VAD](https://github.com/snakers4/silero-vad).
-- [Electron window sources](https://www.electronjs.org/docs/latest/api/desktop-capturer), [content protection](https://www.electronjs.org/docs/latest/api/browser-window#winsetcontentprotectionenable) and [audio loopback](https://www.electronjs.org/docs/latest/api/session#sessetdisplaymediarequesthandlerhandler-opts).
-- UI copy reviewed with [Peter Yang’s no-ai-slop skill](https://github.com/petergyang/no-ai-slop); workspace layout follows the locally installed ui-ux-pro-max guidance.
+- [Transformers.js audio processing](https://huggingface.co/docs/transformers.js/guides/node-audio-processing), [Whisper large-v3-turbo](https://huggingface.co/onnx-community/whisper-large-v3-turbo) and [Whisper base](https://huggingface.co/onnx-community/whisper-base) ONNX models, [OpenAI Whisper](https://github.com/openai/whisper), [Silero VAD](https://github.com/snakers4/silero-vad).
+- [Electron window sources](https://www.electronjs.org/docs/latest/api/desktop-capturer), [content protection](https://www.electronjs.org/docs/latest/api/browser-window#winsetcontentprotectionenable), [audio loopback](https://www.electronjs.org/docs/latest/api/session#sessetdisplaymediarequesthandlerhandler-opts) and [Tray](https://www.electronjs.org/docs/latest/api/tray).
+- Copy reviewed with [Peter Yang’s no-ai-slop skill](https://github.com/petergyang/no-ai-slop); layout follows the locally installed ui-ux-pro-max guidance.
 
-Original application code: MIT. Electron: MIT. OpenAI Codex: Apache-2.0. Transformers.js: Apache-2.0. Silero VAD: MIT. ONNX Runtime: MIT. Whisper weights: Apache-2.0 per the model repository. Dependency license files are retained in the packaged dependencies. No Cluely source, assets or proprietary binaries are included.
+Original application code: MIT. Electron: MIT. OpenAI Codex: Apache-2.0. Transformers.js: Apache-2.0. Silero VAD: MIT. ONNX Runtime: MIT. Whisper weights: Apache-2.0 per the model repository. Dependency license files are kept in the packaged dependencies.

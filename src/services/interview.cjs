@@ -3,6 +3,12 @@ const path = require("node:path");
 const { safeStorage, dialog } = require("electron");
 const { Assistant } = require("./assistant.cjs");
 const { Transcription } = require("./transcription.cjs");
+const {
+  modelFiles,
+  speechModel,
+  defaultModelKey,
+  SPEECH_MODELS,
+} = require("./speech-model.cjs");
 const LANGUAGE_CODES = [
   "auto",
   "ru",
@@ -27,23 +33,23 @@ async function createInterview(
     onDraft = () => {},
   } = {},
 ) {
+  // English by default for new installs; saved choices from older versions win.
   const settings = {
-    locale: "ru",
-    speechLanguage: "auto",
-    answerLanguage: "auto",
+    speechLanguage: "en",
+    answerLanguage: "en",
     autoAnswer: false,
     style: "concise",
     context: "",
     interviewType: "general",
     notesEnabled: true,
     includeNotes: false,
-    buddy: true,
+    source: "system",
+    speechModel: defaultModelKey(),
   };
   const location = path.join(app.getPath("userData"), "settings.json");
   try {
     const saved = JSON.parse(await fs.readFile(location, "utf8"));
     for (const k of [
-      "locale",
       "speechLanguage",
       "answerLanguage",
       "autoAnswer",
@@ -51,7 +57,8 @@ async function createInterview(
       "interviewType",
       "notesEnabled",
       "includeNotes",
-      "buddy",
+      "source",
+      "speechModel",
     ])
       if (validSetting(k, saved[k])) settings[k] = saved[k];
     if (saved.contextEncrypted && safeStorage.isEncryptionAvailable())
@@ -121,32 +128,21 @@ async function createInterview(
         }, 1400);
     },
     onLevel,
+    speechModel(settings.speechModel),
   );
   state.whisper = whisper.state;
-  await ai.status();
-  try {
-    await fs.access(
-      path.join(
-        whisper.cacheDir,
-        "onnx-community",
-        "whisper-base",
-        "onnx",
-        "decoder_model_merged_quantized.onnx",
-      ),
-    );
-    await fs.access(
-      path.join(
-        whisper.cacheDir,
-        "onnx-community",
-        "whisper-base",
-        "onnx",
-        "encoder_model_quantized.onnx",
-      ),
-    );
-    whisper.load();
-  } catch {
-    /* A fresh install waits for the user to prepare the model. */
+  // A model already on disk counts as ready; it loads into memory on first use.
+  async function markIfDownloaded() {
+    try {
+      for (const file of modelFiles(whisper.cacheDir, whisper.model))
+        await fs.access(file);
+      whisper.markDownloaded();
+    } catch {
+      /* Setup offers the download. */
+    }
   }
+  await ai.status();
+  await markIfDownloaded();
   let saveQueue = Promise.resolve();
   async function save() {
     const { context, ...saved } = settings;
@@ -166,8 +162,9 @@ async function createInterview(
   function validSetting(key, value) {
     if (["speechLanguage", "answerLanguage"].includes(key))
       return LANGUAGE_CODES.includes(value);
-    if (key === "locale") return ["ru", "en", "kk"].includes(value);
-    if (["autoAnswer", "notesEnabled", "includeNotes", "buddy"].includes(key))
+    if (key === "source") return ["system", "microphone"].includes(value);
+    if (key === "speechModel") return Object.hasOwn(SPEECH_MODELS, value);
+    if (["autoAnswer", "notesEnabled", "includeNotes"].includes(key))
       return typeof value === "boolean";
     if (key === "interviewType")
       return [
@@ -267,8 +264,15 @@ async function createInterview(
     if (op === "setting") {
       if (!payload || !validSetting(payload.key, payload.value))
         throw new Error("Invalid setting");
+      if (payload.key === "speechModel" && state.recording)
+        throw new Error("Stop listening to change the speech model.");
       settings[payload.key] = payload.value;
       await save();
+      if (
+        payload.key === "speechModel" &&
+        whisper.setModel(speechModel(payload.value))
+      )
+        await markIfDownloaded();
       update();
       return;
     }
@@ -318,6 +322,7 @@ async function createInterview(
         throw new Error("Invalid recording state");
       if (active && !whisper.state.ready)
         throw new Error("Load Whisper first.");
+      whisper.keepWarm(active);
       state.recording = active;
       state.source = active ? source : null;
       state.startedAt = active ? Date.now() : state.startedAt;
@@ -328,16 +333,23 @@ async function createInterview(
       if (state.recording) throw new Error("Stop the current recording first.");
       state.source = "system";
       state.startedAt = Date.now();
-      await whisper.startNative(
-        app.isPackaged
-          ? path.join(process.resourcesPath, "bin", "audio-sck")
-          : path.join(__dirname, "..", "..", "bin", "audio-sck"),
-        settings.speechLanguage,
-      );
+      whisper.keepWarm(true);
+      try {
+        await whisper.startNative(
+          app.isPackaged
+            ? path.join(process.resourcesPath, "bin", "audio-sck")
+            : path.join(__dirname, "..", "..", "bin", "audio-sck"),
+          settings.speechLanguage,
+        );
+      } catch (error) {
+        whisper.keepWarm(false);
+        throw error;
+      }
       return;
     }
     if (op === "stop") {
       await whisper.stop();
+      whisper.keepWarm(false);
       state.recording = false;
       state.source = null;
       update();

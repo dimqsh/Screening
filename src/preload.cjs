@@ -24,6 +24,12 @@ contextBridge.exposeInMainWorld("captureLab", {
   change: (key, value) => ipcRenderer.invoke("lab:change", key, value),
   action: (name) => ipcRenderer.invoke("lab:action", name),
   buddyMouse: (inside) => ipcRenderer.send("buddy:mouse", Boolean(inside)),
+  keyboard: (on) => ipcRenderer.send("buddy:keyboard", Boolean(on)),
+  onAsk: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("buddy:ask", listener);
+    return () => ipcRenderer.removeListener("buddy:ask", listener);
+  },
   subscribe: (callback) => {
     const listener = (_, value) => callback(value);
     ipcRenderer.on("lab:update", listener);

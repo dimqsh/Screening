@@ -1,7 +1,7 @@
 {
   "name": "screening",
-  "version": "0.5.0",
-  "description": "Interview chat with local multilingual Whisper, ChatGPT and window snapshots",
+  "version": "0.6.0",
+  "description": "Interview answers at your MacBook notch, right under your camera. Local Whisper, ChatGPT answers, hidden from screen sharing.",
   "main": "src/main.cjs",
   "private": true,
   "scripts": {
@@ -12,7 +12,8 @@
     "package:mac": "npm run build:native && node scripts/prepare-runtime.cjs && electron-builder --mac dmg --arm64 --publish never",
     "test": "node --test test/unit.test.cjs test/buddy.test.cjs",
     "package:win": "node scripts/prepare-runtime.cjs && electron-builder --win nsis --x64 --publish never",
-    "verify:interview": "electron . --verify --interview-test"
+    "verify:interview": "electron . --verify --interview-test",
+    "verify:audio": "electron . --verify --interview-test --audio-test"
   },
   "devDependencies": {
     "electron": "40.10.6",
@@ -38,7 +39,8 @@
       "LICENSE",
       "assets/models/**/*",
       "assets/licenses/**/*",
-      "assets/brand/**/*"
+      "assets/brand/**/*",
+      "assets/tray/**/*"
     ],
     "asar": true,
     "asarUnpack": [
@@ -65,9 +67,10 @@
       "hardenedRuntime": false,
       "entitlements": "scripts/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Screening transcribes microphone speech locally when you start recording.",
-        "NSAudioCaptureUsageDescription": "Screening transcribes the meeting audio you choose.",
-        "NSScreenCaptureUsageDescription": "Screening captures a window only when you request a snapshot, and uses screen access for meeting audio and capture checks."
+        "NSMicrophoneUsageDescription": "Screening transcribes your microphone on this computer while you listen.",
+        "NSAudioCaptureUsageDescription": "Screening transcribes the call audio you choose, on this computer.",
+        "NSScreenCaptureUsageDescription": "Screening snapshots a window only when you ask, and uses screen access for call audio and the screen sharing test.",
+        "LSUIElement": true
       },
       "extraResources": [
         {

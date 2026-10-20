@@ -414,7 +414,12 @@ module.exports = async function verify(ctx) {
 
   // macOS 27 moves Buddy to a new window to turn protection off. The new
   // window must not reopen an answer that was closed, in front of the call.
+  // Answers show only after setup, so the scene stands in for a ready one.
   const savedMessages = interview.state.messages;
+  const savedReady = interview.state.whisper.ready;
+  const savedConnected = interview.state.ai.connected;
+  interview.state.whisper.ready = true;
+  interview.state.ai.connected = true;
   interview.state.messages = [
     { id: 9301, role: "user", text: QUESTION },
     { id: 9302, role: "assistant", status: "done", text: STAR_ANSWER },
@@ -440,6 +445,8 @@ module.exports = async function verify(ctx) {
   await delay(500);
   const reopened = await probe();
   interview.state.messages = savedMessages;
+  interview.state.whisper.ready = savedReady;
+  interview.state.ai.connected = savedConnected;
   publish();
   await delay(300);
   check("A new Buddy window keeps a closed answer closed", () => {

@@ -29,6 +29,8 @@ jobs:
       - run: npm run package:mac
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          SCREENING_SIGN_P12: ${{ secrets.SCREENING_SIGN_P12 }}
+          SCREENING_SIGN_PASSWORD: ${{ secrets.SCREENING_SIGN_PASSWORD }}
       - name: Verify the DMG app and local Whisper
         run: |
           set -e
@@ -38,6 +40,8 @@ jobs:
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$PWD/build/dmg-check"
           trap 'hdiutil detach "$PWD/build/dmg-check" || true' EXIT
           codesign --verify --deep --strict "$PWD/build/dmg-check/Screening.app"
+          # Another certificate would make every user allow access again.
+          codesign -d -r- "$PWD/build/dmg-check/Screening.app" 2>&1 | grep -F 'certificate root = H"aeae2d13bc6111253bd6427dc550f91e6b2154f3"'
           export CAPTURE_LAB_ARTIFACTS="$PWD/validation/macos-ci"
           export CAPTURE_LAB_MODEL_CACHE="$PWD/build/model-cache"
           export CAPTURE_LAB_TEST_AUDIO="$PWD/build/jfk.f32"

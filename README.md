@@ -9,13 +9,13 @@ There are no other windows. A small island icon in the menu bar is the way in.
 ## Get started
 
 1. Install Screening.
-   - **Mac (Apple Silicon):** paste this in Terminal. It downloads the newest DMG, copies Screening to Applications and opens it.
+   - **Mac:** paste this in Terminal. It downloads the newest DMG for your Mac (Apple Silicon or Intel), copies Screening to Applications and opens it.
 
      ```sh
      curl -fsSL https://raw.githubusercontent.com/dimqsh/Screening/main/install.sh | bash
      ```
 
-     Or download the DMG from [Releases](https://github.com/dimqsh/Screening/releases), drag Screening to Applications, then right-click it and choose **Open** the first time.
+     Or download the DMG from [Releases](https://github.com/dimqsh/Screening/releases) (`mac-arm64` for Apple Silicon, `mac-x64` for Intel), drag Screening to Applications, then right-click it and choose **Open** the first time.
    - **Windows (x64):** run the EXE from [Releases](https://github.com/dimqsh/Screening/releases). If SmartScreen warns, choose **More info**, then **Run anyway**.
 2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with its setup steps.
 3. **Set up speech.** On macOS 26 and later, Apple's on-device speech recognition transcribes most languages live (see [Live transcript](#live-transcript)), so this step is done without a download. If macOS has not downloaded your speech language yet, Screening asks it to and the step shows the progress. Whisper is then optional: download it for Kazakh, **Detect Automatically**, **Transcription → Whisper, Phrase by Phrase**, or as a backup if Apple's transcription stops. Choosing Kazakh, automatic detection or Whisper later brings the step back. On Windows and on macOS 14 and 15, **download the speech model** once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
@@ -131,6 +131,7 @@ npm test
 npm run verify
 npm run verify:capture # needs screen permission; shows a synthetic marker
 npm run package:mac # Apple Silicon DMG, on macOS
+npm run package:mac:x64 # Intel DMG, on macOS with either chip
 npm run package:win # x64 NSIS EXE, on Windows
 ```
 
@@ -140,7 +141,11 @@ The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.h
 
 To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with Apple's live transcription, when the Mac has it, starting as if Whisper were not downloaded, and with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, checks that live words reach Buddy while the sample plays (with Apple), and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
 
-The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test` on it. The Mac DMG must be signed with Screening’s certificate, so it is built with `npm run package:mac` on a Mac that has the certificate until the macOS workflow passes the signing secrets. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
+The macOS release workflow builds each DMG on a Mac of the same architecture, Apple Silicon and Intel, checks that every bundled binary matches it, checks that it is signed with Screening's certificate, and runs `--verify --interview-test` on the app inside the DMG. onnxruntime-node no longer publishes Intel Mac binaries, so the Intel DMG uses the binary from 1.23.2, the last release that had one.
+
+Each installer carries only its own platform's onnxruntime-node and sharp binaries. The `files` patterns in `package.json` leave out the rest, using the platform of the computer that builds it, which is why each package script runs on its own OS. Both release workflows fail if another platform's binaries end up in the app. onnxruntime-web is left out too: transformers.js depends on it for browsers, but its Node build runs Whisper on onnxruntime-node, and so does the Silero VAD speech gate.
+
+The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test` on the installed app. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 
 The Mac app is signed with Screening’s own certificate, not an Apple Developer ID, and it is not notarized. macOS remembers the microphone and call audio permissions by that certificate, so updates keep them. Versions before 0.7.1 were ad-hoc signed, so macOS treated every update as a new app. Gatekeeper may still ask you to confirm a DMG downloaded in a browser, and SmartScreen may ask on Windows; `install.sh` removes the download quarantine so the app opens directly. There is no auto-update; run the install line again to update.
 

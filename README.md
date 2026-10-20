@@ -8,7 +8,7 @@ There are no other windows. A small island icon in the menu bar is the way in.
 
 ## Get started
 
-1. Install the DMG (Apple Silicon) or the EXE (Windows x64) from this repository’s Releases.
+1. Install the DMG for your Mac (`mac-arm64` for Apple Silicon, `mac-x64` for Intel) or the EXE (Windows x64) from this repository’s Releases.
 2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with two setup steps.
 3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
 4. **Sign in with ChatGPT.** The bundled official Codex CLI opens your browser. Your ChatGPT plan, model access and limits apply. This does not turn a ChatGPT subscription into an OpenAI API key.
@@ -87,6 +87,7 @@ npm test
 npm run verify
 npm run verify:capture # needs screen permission; shows a synthetic marker
 npm run package:mac # Apple Silicon DMG, on macOS
+npm run package:mac:x64 # Intel DMG, on macOS with either chip
 npm run package:win # x64 NSIS EXE, on Windows
 ```
 
@@ -95,6 +96,8 @@ The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.h
 `npm run verify` checks that Buddy is the only visible window, the engine stays hidden, there is no Dock icon, the menu-bar icon exists, and protection, focus hand-off, notch placement, notes, background, paste and English text all work. It saves screenshots of Buddy’s states in `validation/` using synthetic data; no account request is made.
 
 To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
+
+The macOS release workflow builds each DMG on a Mac of the same architecture, Apple Silicon and Intel, checks that every bundled binary matches it, and runs `--verify --interview-test --screening-test --compact-test` on the app inside the DMG. onnxruntime-node no longer publishes Intel Mac binaries, so the Intel DMG uses the binary from 1.23.2, the last release that had one.
 
 The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test --audio-test` on the installed app. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 

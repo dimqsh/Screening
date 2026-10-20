@@ -1,4 +1,4 @@
-name: Build and upload macOS installer
+name: Build and upload macOS installers
 on:
   workflow_dispatch:
     inputs:
@@ -9,10 +9,27 @@ permissions:
   contents: write
 jobs:
   macos:
-    runs-on: macos-15
-    timeout-minutes: 30
+    name: macos (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            machine: arm64
+            runner: macos-15
+            package: package:mac
+          # GitHub's last Intel image; macos-13 was retired in December 2025.
+          - arch: x64
+            machine: x86_64
+            runner: macos-15-intel
+            package: package:mac:x64
+    # Each DMG is tested on a Mac of its own architecture.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      ARCH: ${{ matrix.arch }}
+      MACHINE: ${{ matrix.machine }}
     steps:
       - name: Validate release tag
         run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
@@ -26,28 +43,37 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: node scripts/prepare-speech-test.cjs
-      - run: npm run package:mac
+      - run: npm run ${{ matrix.package }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: Verify the DMG app and local Whisper
         run: |
           set -e
-          dmg=$(find dist -maxdepth 1 -name '*mac-arm64.dmg' -print -quit)
+          dmg=$(find dist -maxdepth 1 -name "*mac-$ARCH.dmg" -print -quit)
+          test -n "$dmg"
           hdiutil verify "$dmg"
           mkdir -p build/dmg-check
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$PWD/build/dmg-check"
           trap 'hdiutil detach "$PWD/build/dmg-check" || true' EXIT
-          codesign --verify --deep --strict "$PWD/build/dmg-check/Screening.app"
+          app="$PWD/build/dmg-check/Screening.app"
+          codesign --verify --deep --strict "$app"
+          unpacked="$app/Contents/Resources/app.asar.unpacked/node_modules"
+          for binary in "$app/Contents/MacOS/Screening" "$app"/Contents/Resources/bin/* \
+            "$app/Contents/Resources/codex/codex" \
+            "$unpacked/onnxruntime-node/bin/napi-v6/darwin/$ARCH/onnxruntime_binding.node" \
+            "$unpacked"/@img/sharp-darwin-$ARCH/lib/*.node; do
+            lipo "$binary" -verify_arch "$MACHINE" || { echo "Not $MACHINE: $binary"; exit 1; }
+          done
           export CAPTURE_LAB_ARTIFACTS="$PWD/validation/macos-ci"
           export CAPTURE_LAB_MODEL_CACHE="$PWD/build/model-cache"
           export CAPTURE_LAB_TEST_AUDIO="$PWD/build/jfk.f32"
-          "$PWD/build/dmg-check/Screening.app/Contents/MacOS/Screening" --verify --interview-test --screening-test --compact-test > build/macos-verify.log 2>&1
+          "$app/Contents/MacOS/Screening" --verify --interview-test --screening-test --compact-test > build/macos-verify.log 2>&1
           cat build/macos-verify.log
           test -f validation/macos-ci/verification.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macOS-validation
+          name: macOS-${{ matrix.arch }}-validation
           path: |
             validation/macos-ci/
             build/macos-verify.log
@@ -58,5 +84,5 @@ jobs:
         run: |
           set -e
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          shasum -a 256 dist/*mac-arm64.dmg
-          gh release upload "$RELEASE_TAG" dist/*mac-arm64.dmg --clobber
+          shasum -a 256 dist/*mac-$ARCH.dmg
+          gh release upload "$RELEASE_TAG" dist/*mac-$ARCH.dmg --clobber

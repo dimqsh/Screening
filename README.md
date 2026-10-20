@@ -99,6 +99,8 @@ To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LA
 
 The macOS release workflow builds each DMG on a Mac of the same architecture, Apple Silicon and Intel, checks that every bundled binary matches it, and runs `--verify --interview-test --screening-test --compact-test` on the app inside the DMG. onnxruntime-node no longer publishes Intel Mac binaries, so the Intel DMG uses the binary from 1.23.2, the last release that had one.
 
+Each installer carries only its own platform's onnxruntime-node and sharp binaries. The `files` patterns in `package.json` leave out the rest, using the platform of the computer that builds it, which is why each package script runs on its own OS. Both release workflows fail if another platform's binaries end up in the app.
+
 The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test --audio-test` on the installed app. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 
 Installers are not signed with a publisher certificate; the Mac bundle is ad-hoc signed. Gatekeeper and SmartScreen may ask you to confirm opening it. There is no auto-update.

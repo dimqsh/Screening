@@ -64,6 +64,11 @@ jobs:
             "$unpacked"/@img/sharp-darwin-$ARCH/lib/*.node; do
             lipo "$binary" -verify_arch "$MACHINE" || { echo "Not $MACHINE: $binary"; exit 1; }
           done
+          # No other platform's onnxruntime or sharp binaries ride along.
+          ort=$(cd "$unpacked/onnxruntime-node/bin/napi-v6" && echo */*)
+          img=$(cd "$unpacked/@img" && echo *)
+          [ "$ort" = "darwin/$ARCH" ] || { echo "Extra onnxruntime binaries: $ort"; exit 1; }
+          [ "$img" = "sharp-darwin-$ARCH sharp-libvips-darwin-$ARCH" ] || { echo "Extra sharp binaries: $img"; exit 1; }
           export CAPTURE_LAB_ARTIFACTS="$PWD/validation/macos-ci"
           export CAPTURE_LAB_MODEL_CACHE="$PWD/build/model-cache"
           export CAPTURE_LAB_TEST_AUDIO="$PWD/build/jfk.f32"

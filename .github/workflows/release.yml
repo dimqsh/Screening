@@ -43,6 +43,12 @@ jobs:
             Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -Like '*Screening*' | Format-List DisplayName,InstallLocation
             throw 'Installed executable is missing'
           }
+          # No other platform's onnxruntime or sharp binaries ride along.
+          $unpacked = Join-Path (Split-Path $installedExe) 'resources\app.asar.unpacked\node_modules'
+          $ort = (Get-ChildItem "$unpacked\onnxruntime-node\bin\napi-v6\*\*" -Directory | ForEach-Object { "$($_.Parent.Name)/$($_.Name)" }) -join ' '
+          $img = (Get-ChildItem "$unpacked\@img" -Directory).Name -join ' '
+          if ($ort -ne 'win32/x64') { throw "Extra onnxruntime binaries: $ort" }
+          if ($img -ne 'sharp-win32-x64') { throw "Extra sharp binaries: $img" }
           Write-Host "Testing installed app: $installedExe"
           $app = Start-Process -FilePath $installedExe -ArgumentList '--verify','--interview-test','--screening-test','--compact-test' -Wait -PassThru -RedirectStandardOutput "$pwd/build/windows-verify.log" -RedirectStandardError "$pwd/build/windows-verify-error.log"
           Get-Content "$pwd/build/windows-verify.log"

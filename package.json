@@ -40,6 +40,7 @@
       "!**/node_modules/onnxruntime-node/bin/napi-v6/!(${platform}){,/**}",
       "!**/node_modules/onnxruntime-node/bin/napi-v6/${platform}/!(${arch}){,/**}",
       "!**/node_modules/@img/sharp-!(${platform}-${arch}|libvips-${platform}-${arch}){,/**}",
+      "!**/node_modules/onnxruntime-web{,/**}",
       "LICENSE",
       "assets/models/**/*",
       "assets/licenses/**/*",

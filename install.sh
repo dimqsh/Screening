@@ -16,9 +16,18 @@ if [ "$(uname -m)" != "arm64" ]; then
 fi
 
 echo "Finding the newest Screening…"
-url=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=20" |
-  grep -o '"browser_download_url": *"[^"]*mac-arm64\.dmg"' |
-  head -n 1 | sed -E 's/.*"(https[^"]+)"$/\1/')
+# The latest release's page redirects to its tag; this needs no API quota.
+tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$RELEASES/latest" | sed -E 's#.*/tag/##') || true
+url=""
+if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  url="$RELEASES/download/$tag/Screening-${tag#v}-mac-arm64.dmg"
+  curl -fsSI -o /dev/null "$url" || url=""
+fi
+if [ -z "$url" ]; then
+  url=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=20" |
+    grep -o '"browser_download_url": *"[^"]*mac-arm64\.dmg"' |
+    head -n 1 | sed -E 's/.*"(https[^"]+)"$/\1/') || true
+fi
 if [ -z "$url" ]; then
   echo "No Mac download found. See $RELEASES"
   exit 1

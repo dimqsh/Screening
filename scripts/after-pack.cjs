@@ -34,6 +34,10 @@ function signWith(bundle, { data, password }) {
   const secret = crypto.randomBytes(18).toString("hex");
   const security = (...args) =>
     execFileSync("/usr/bin/security", args, { stdio: "pipe" }).toString();
+  const searchList = security("list-keychains", "-d", "user")
+    .split("\n")
+    .map((line) => line.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
   try {
     fs.writeFileSync(p12, data, { mode: 0o600 });
     security("create-keychain", "-p", secret, keychain);
@@ -45,6 +49,9 @@ function signWith(bundle, { data, password }) {
       security("find-identity", "-p", "codesigning", keychain),
     )?.[1];
     if (!identity) throw new Error("The signing certificate has no code signing identity.");
+    // codesign on macOS 15 (the CI runner) looks for the private key in the
+    // search list even when it is given --keychain.
+    security("list-keychains", "-d", "user", "-s", keychain, ...searchList);
     execFileSync(
       "/usr/bin/codesign",
       ["--force", "--deep", "--timestamp=none", "--keychain", keychain, "--sign", identity, bundle],
@@ -57,6 +64,7 @@ function signWith(bundle, { data, password }) {
       /* Already gone. */
     }
     fs.rmSync(dir, { recursive: true, force: true });
+    security("list-keychains", "-d", "user", "-s", ...searchList);
   }
 }
 

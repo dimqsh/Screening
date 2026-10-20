@@ -20,9 +20,9 @@ const CODE_ANSWER =
   "Use a hash set and one pass, so it runs in O(n).\n\n```python\ndef pairs(nums, target):\n    seen, out = set(), []\n    for n in nums:\n        if target - n in seen:\n            out.append((target - n, n))\n        seen.add(n)\n    return out\n```\n\nFor `[4, 8, 15, 16, 23, 42]` and 31 this returns **(8, 23)** and **(15, 16)**.";
 
 module.exports = async function verify(ctx) {
+  let { buddy } = ctx;
   const {
     app,
-    buddy,
     engine,
     tray,
     interview,
@@ -45,12 +45,14 @@ module.exports = async function verify(ctx) {
   await fs.mkdir(artifactDir, { recursive: true });
   // Any script error in a window fails verification, even if every check passes.
   const scriptErrors = [];
-  for (const [name, win] of [["Buddy", buddy], ["engine", engine]])
+  const watch = (name, win) =>
     win.webContents.on("console-message", (event, legacyLevel, legacyMessage) => {
       const level = event.level ?? legacyLevel;
       if (level === "error" || level === 3)
         scriptErrors.push(`${name}: ${event.message ?? legacyMessage}`);
     });
+  watch("Buddy", buddy);
+  watch("engine", engine);
   const checks = [];
   function check(name, fn) {
     fn();
@@ -137,10 +139,22 @@ module.exports = async function verify(ctx) {
   });
   check("Protection can be disabled and restored", () => {
     change("protection", false);
-    assert.equal(buddy.isContentProtected(), false);
+    assert.equal(ctx.buddy.isContentProtected(), false);
     change("protection", true);
-    assert.equal(buddy.isContentProtected(), true);
+    assert.equal(ctx.buddy.isContentProtected(), true);
   });
+  // Where macOS kept the old window hidden, Buddy now lives in a new one.
+  if (ctx.buddy !== buddy) {
+    buddy = ctx.buddy;
+    watch("Buddy", buddy);
+    await until(
+      () =>
+        BrowserWindow.getAllWindows().length === 2 &&
+        !buddy.webContents.isLoading(),
+      10000,
+      "The old Buddy window did not close",
+    );
+  }
   check("Input validation rejects unknown settings and oversized notes", () => {
     assert.throws(() => change("arbitrary", true));
     assert.throws(() => change("protection", "yes"));

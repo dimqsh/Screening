@@ -10,7 +10,7 @@
     "verify": "electron . --verify",
     "verify:capture": "electron . --verify --capture-test",
     "package:mac": "npm run build:native && node scripts/prepare-runtime.cjs && electron-builder --mac dmg --arm64 --publish never",
-    "test": "node --test test/unit.test.cjs test/buddy.test.cjs",
+    "test": "node --test test/unit.test.cjs test/buddy.test.cjs test/live-speech.test.cjs",
     "package:win": "node scripts/prepare-runtime.cjs && electron-builder --win nsis --x64 --publish never",
     "verify:interview": "electron . --verify --interview-test",
     "verify:audio": "electron . --verify --interview-test --audio-test"
@@ -80,7 +80,8 @@
             "capture-sck",
             "audio-sck",
             "audio-tap",
-            "notch-info"
+            "notch-info",
+            "live-speech"
           ]
         }
       ],

@@ -1,6 +1,6 @@
 # Screening
 
-Interview answers at your MacBook notch, right under your camera. Screening listens to the call, transcribes it on your Mac with Whisper, and drafts answers through your ChatGPT account. Everything happens in **Buddy**, a black island that grows out of the notch. When you read from Buddy, you are looking almost straight at the camera.
+Interview answers at your MacBook notch, right under your camera. Screening listens to the call, transcribes it on your Mac, word by word with Apple's speech recognition on macOS 26 or phrase by phrase with Whisper, and drafts answers through your ChatGPT account. Everything happens in **Buddy**, a black island that grows out of the notch. When you read from Buddy, you are looking almost straight at the camera.
 
 There are no other windows. A small island icon in the menu bar is the way in.
 
@@ -18,7 +18,7 @@ There are no other windows. A small island icon in the menu bar is the way in.
      Or download the DMG from [Releases](https://github.com/dimqsh/Screening/releases), drag Screening to Applications, then right-click it and choose **Open** the first time.
    - **Windows (x64):** run the EXE from [Releases](https://github.com/dimqsh/Screening/releases). If SmartScreen warns, choose **More info**, then **Run anyway**.
 2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with its setup steps.
-3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
+3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline. On macOS 26 and later, most languages are also transcribed live by Apple's on-device speech recognition; see [Live transcript](#live-transcript).
 4. **Sign in with ChatGPT.** The bundled official Codex CLI opens your browser. Your ChatGPT plan, model access and limits apply. This does not turn a ChatGPT subscription into an OpenAI API key.
 5. **Allow the microphone and call audio** on a Mac. One button asks for both, and each macOS prompt has an **Allow** button. Screening does not need screen recording on macOS 15 or later. If you turned one down before, System Settings opens on its page; call audio is under **System Audio Recording Only**. You can do this later from the menu, and updates keep both.
 6. In Buddy, press **Call audio** to listen to the interviewer, or **Microphone** to listen to yourself. Press it again, now labeled **Stop**, to stop.
@@ -32,7 +32,7 @@ There are no other windows. A small island icon in the menu bar is the way in.
 - **Answer Speed** in the menu: **Fast**, the default, uses your plan's quick model, with the first words in about 4–6 seconds and the whole answer in about 6. **Best Quality** uses the default model. **Answer Automatically** answers right after a phrase that ends in a question mark, otherwise after 2.5 seconds without new speech.
 - **Hover** to open the full island; click Buddy’s face to keep it open. The full island has icon tabs at the top, a card with Buddy and three steps (listen, hear, answer) with the current one lit, four chips (**Call audio**, **Microphone**, **Answer**, **Snapshot**), and four tabs:
   - **Answer**: the latest answer, earlier answers with the arrows, Copy, and a box to type or paste a question.
-  - **Transcript**: what was heard, with times, and **Answer what was just said**.
+  - **Transcript**: what was heard, with times, and **Answer what was just said**. With the live transcript, the sentence being spoken shows at the bottom with a caret and changes as words arrive.
   - **Notes**: talking points. Turn on **Use notes in answers** to send them with your questions.
   - **You**: your target role, skills and real wins. Buddy uses only what you write here and never makes up achievements.
 - **Snapshot** a window to send a coding task or a diagram. Buddy takes one image, shows it in the box, and sends it with your next message. On macOS 15 and later, Snapshot opens the macOS window picker, so Screening needs no screen recording access; choose the window within about 10 seconds. On macOS 14 and Windows, Buddy shows its own window list.
@@ -43,7 +43,7 @@ There are no other windows. A small island icon in the menu bar is the way in.
 
 ## The menu-bar menu
 
-Click the island icon in the menu bar for everything else: start or stop listening, answer, ask, show or hide Buddy, **Float Buddy** or **Snap Buddy to the Notch**, **Answer Speed**, **Allow Microphone and Call Audio…** while either is off, interview type, answer length, automatic answers, notes in answers, speech and answer language, **Hide From Screen Sharing**, **Test Screen Sharing Protection**, setup status, **Export Session**, **New Session** and **Quit**. While Screening listens, the icon fills in and the menu bar shows the elapsed time.
+Click the island icon in the menu bar for everything else: start or stop listening, answer, ask, show or hide Buddy, **Float Buddy** or **Snap Buddy to the Notch**, **Answer Speed**, **Allow Microphone and Call Audio…** while either is off, interview type, answer length, automatic answers, notes in answers, speech and answer language, **Transcription** (live with Apple, or Whisper) on macOS 26, **Hide From Screen Sharing**, **Test Screen Sharing Protection**, setup status, **Export Session**, **New Session** and **Quit**. While Screening listens, the icon fills in and the menu bar shows the elapsed time.
 
 | Action                       | Shortcut             |
 | ---------------------------- | -------------------- |
@@ -67,15 +67,45 @@ The interface is in English. Speech and answers default to English. You can pick
 
 Synthetic voices are cleaner than a real call, so expect more errors in noise and with strong accents. The Accurate model needs a fast CPU to keep up with live speech, which is why it is the default only on Apple Silicon.
 
-Audio reaches Whisper phrase by phrase: Screening cuts it at natural pauses, so a phrase is transcribed about half a second after the speaker stops, and a long stretch of speech is cut every 10 seconds. While Whisper works on one phrase, newer ones wait together, so a slower computer gets longer pieces instead of falling behind. Stop sends the remaining audio through Whisper. A bundled Silero detector skips chunks without speech before Whisper runs; it does not tell speakers apart. Call audio can include sound from other apps. On macOS 14.2 and later it comes from a Core Audio tap, which needs only System Audio Recording; before that it goes through ScreenCaptureKit, which needs screen recording.
+When Whisper transcribes, audio reaches it phrase by phrase: Screening cuts it at natural pauses, so a phrase is transcribed about half a second after the speaker stops, and a long stretch of speech is cut every 10 seconds. While Whisper works on one phrase, newer ones wait together, so a slower computer gets longer pieces instead of falling behind. Stop sends the remaining audio through Whisper. A bundled Silero detector skips chunks without speech before Whisper runs; it does not tell speakers apart. Call audio can include sound from other apps. On macOS 14.2 and later it comes from a Core Audio tap, which needs only System Audio Recording; before that it goes through ScreenCaptureKit, which needs screen recording.
+
+## Live transcript
+
+On macOS 26 and later, Screening uses Apple's on-device speech recognition (SpeechAnalyzer) instead of Whisper for most languages. Words appear in Buddy's transcript and its "hear" step while the person is still talking, about half a second behind them. Whisper writes nothing until a phrase ends.
+
+- **What uses it.** English, Spanish, French, German, Chinese and Japanese use Apple's newer SpeechTranscriber model. Russian, Ukrainian and Turkish use DictationTranscriber, the model behind macOS dictation; in our tests it wrote no punctuation. Kazakh and **Detect Automatically** use Whisper, and so do macOS 14 and 15, Windows, and **Transcription → Whisper, Phrase by Phrase** in the menu. If Apple's helper stops during a session, Whisper takes over.
+- **Words that may still change** show at the bottom of the transcript with a caret. Answers use only settled sentences. Pressing **Answer** in the middle of a sentence asks Apple to settle it first, which takes about a tenth of a second. Apple settles words on its own schedule, often two seconds after the speaker stops, so Screening asks it to settle 0.7 s after a sentence that ends in . ? or !, and 1.6 s after anything else. Settling earlier, in the middle of a sentence, cost Apple context: JFK's pause after "ask not" became "ask not. , you, your country".
+- **No new permission.** Apple's transcription runs on the Mac and asks for no Speech Recognition access. While the tests ran, macOS's privacy service logged no Speech Recognition check. Listening still needs the microphone or System Audio Recording, as before.
+- **Language downloads.** macOS downloads each language once, for every app. Here that took 17–104 s for Spanish, German and Ukrainian; English and Russian were already installed. Until a language is ready, Whisper listens while Screening downloads it in the background, and the **Transcription** menu shows progress. Apple lets an app keep five languages; choosing a sixth lets go of another, which macOS keeps on disk until it needs the space.
+- **Memory.** Whisper does not load while Apple listens. The helper uses about 18 MB and Apple's speech service about 65 MB, compared with 0.7–2.4 GB for a loaded Whisper model.
+
+We measured both engines in real time on an M3 Pro (18 GB, macOS 27.0.1) with other apps running; ranges cover two runs. Each sample was written in 100 ms chunks, as call audio arrives, followed by 3 s of silence: the public JFK recording and one three-sentence interview question per language, spoken by the macOS voices Samantha, Milena, Mónica, Anna, Lesya and Aru.
+
+| Seconds | Apple live | Whisper Fast | Whisper Accurate |
+| --- | --- | --- | --- |
+| A word on screen after it is spoken, median per sample | 0.3–0.7 | 2.8–5.4 | 11–17 |
+| The first word on screen after it is spoken | 0.1–0.8 | 5–10 | 11–21 |
+| Settled text after the speaker stops | 0.8–2.0 | 0.9–2.2 | 8–16 |
+
+| Words wrong | Apple live | Whisper Fast | Whisper Accurate |
+| --- | --- | --- | --- |
+| English, JFK recording | 0% | 5% | 0% |
+| English, Samantha | 0% | 0% | 0% |
+| Spanish, Mónica | 0% | 16% | 0% |
+| German, Anna | 3% | 3% | 7% |
+| Russian, Milena | 13% | 17% | 13% |
+| Ukrainian, Lesya | 22% | 26% | 26% |
+| Kazakh, Aru | not supported | 100% | 86% |
+
+Apple was as accurate as Whisper Accurate or better on every language it supports (Russian and Ukrainian without punctuation, which the word counts ignore), and its words reached the screen 4 to 16 times sooner than with Whisper Fast and 20 to 50 times sooner than with Whisper Accurate. Two things make Whisper look slower here than in a typical call. The macOS voices pause for less than 0.6 s between sentences, so Screening heard each sample as one phrase of up to 10 s; real speakers pause more often. And Whisper Accurate took about 6 s per phrase with other apps busy, against the 3.5 s in the table above, so phrases queued behind each other. Apple's recognition runs in a macOS service and kept its speed under the same load. Apple's `fastResults` option matters: without it, words lagged 2.3–5.3 s behind speech, with the same accuracy. To measure again, run `node scripts/compare-speech.cjs apple`, then `whisper fast` and `whisper accurate`.
 
 ## Account and data
 
 ChatGPT sign-in uses the official, bundled `@openai/codex` CLI. Screening never reads or copies OAuth tokens. It keeps its own Codex sign-in and settings in its app data folder, apart from the Codex CLI and app, so their plugins, MCP servers, hooks and memories never run during an interview; updating from 0.7.1 or earlier asks you to sign in once more. The CLI owns its login storage and browser flow.
 
-Whisper receives audio on your computer. ChatGPT receives the typed question or what was said in the last 45 seconds (at most 10 phrases), your background from the **You** tab, a bounded recent conversation, and notes only when **Use notes in answers** is on. A window snapshot is sent once, with the next message. The temporary image file is removed after the request or when Screening quits. Window thumbnails in the picker stay on your computer. Nothing watches the active window or captures it on a timer. Answers stream from one long-running Codex app server in ephemeral, read-only threads, with shell, web and app tools turned off; any tool request stops the answer. Answers need internet and count against your Codex allowance. Screening is an independent project, not an OpenAI product.
+Whisper and Apple's speech recognition receive audio on your computer. ChatGPT receives the typed question or what was said in the last 45 seconds (at most 10 phrases), your background from the **You** tab, a bounded recent conversation, and notes only when **Use notes in answers** is on. A window snapshot is sent once, with the next message. The temporary image file is removed after the request or when Screening quits. Window thumbnails in the picker stay on your computer. Nothing watches the active window or captures it on a timer. Answers stream from one long-running Codex app server in ephemeral, read-only threads, with shell, web and app tools turned off; any tool request stops the answer. Answers need internet and count against your Codex allowance. Screening is an independent project, not an OpenAI product.
 
-Whisper runs in its own process at a lower CPU priority, so the meeting app and Buddy stay smooth while it works. It loads into memory when you start listening, and unloads 90 seconds after you stop or after the last transcription. A loaded model uses about 0.7 GB (Fast) or 2.4 GB (Accurate); an idle Screening uses about 120 MB in total.
+Whisper runs in its own process at a lower CPU priority, so the meeting app and Buddy stay smooth while it works. It loads into memory when you start listening with Whisper, and unloads 90 seconds after you stop or after the last transcription. A loaded model uses about 0.7 GB (Fast) or 2.4 GB (Accurate); an idle Screening uses about 120 MB in total.
 
 Audio, transcripts, answers, notes and snapshots stay in memory and are not saved automatically. Buddy keeps up to 60 messages and six snapshots; ChatGPT gets the latest 12 messages within a 24,000-character budget. Follow-ups use the text history; older snapshots are not sent again. **Export Session** saves the transcript, the conversation and your notes as text. **New Session** clears them. Preferences persist on your computer. Your background is encrypted with the OS key store when one is available; otherwise it stays in memory. The speech model and the Codex sign-in are stored separately and never ship with the source or the installers.
 
@@ -91,7 +121,7 @@ Capture exclusion is not a universal bypass. Electron documents that newer macOS
 
 ## Development
 
-Node.js 22+ and npm. Xcode command-line tools compile the macOS helpers: window capture, call audio (a Core Audio tap, and ScreenCaptureKit for macOS before 14.2) and notch geometry.
+Node.js 22+ and npm. Xcode command-line tools compile the macOS helpers: window capture, call audio (a Core Audio tap, and ScreenCaptureKit for macOS before 14.2), notch geometry and live speech (`scripts/live-speech.swift`). The live speech helper needs the macOS 26 SDK from Xcode 26; when the default Xcode is older, `build:native` uses a newer `/Applications/Xcode*.app` if there is one, and otherwise skips the helper, so Screening uses Whisper only.
 
 ```sh
 npm ci
@@ -108,7 +138,7 @@ The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.h
 
 `npm run verify` checks that Buddy is the only visible window, the engine stays hidden, there is no Dock icon, the menu-bar icon exists, and protection, focus hand-off, notch placement, floating and snapping back, the access step, notes, background, paste and English text all work. It saves screenshots of Buddy’s states in `validation/` using synthetic data; no account request is made.
 
-To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
+To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with Apple's live transcription, when the Mac has it, and with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, checks that live words reach Buddy while the sample plays (with Apple), and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
 
 The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test` on it. The Mac DMG must be signed with Screening’s certificate, so it is built with `npm run package:mac` on a Mac that has the certificate until the macOS workflow passes the signing secrets. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 

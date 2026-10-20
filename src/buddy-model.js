@@ -15,6 +15,8 @@
     const interview = snapshot?.interview;
     const recording = Boolean(interview?.recording);
     const transcript = interview?.transcript || [];
+    // Apple's live transcription shows words before they are final.
+    const partial = recording ? interview?.whisper?.partial || "" : "";
     const view = {
       mode: "idle",
       recording,
@@ -22,7 +24,8 @@
         recording && interview.startedAt
           ? formatElapsed(now - interview.startedAt)
           : "00:00",
-      lastLine: transcript.length ? transcript[transcript.length - 1].text : "",
+      lastLine: partial || (transcript.length ? transcript[transcript.length - 1].text : ""),
+      partial,
       question: "",
       answer: "",
       answerId: null,
@@ -110,6 +113,9 @@
 
   const clip = (text, max) =>
     text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+  // Live words grow at the end, so the newest ones stay in view.
+  const clipStart = (text, max) =>
+    text.length > max ? `…${text.slice(1 - max).trimStart()}` : text;
 
   // Three steps beside the character: listen, hear, answer. One is lit.
   function buddyActivity(view) {
@@ -117,11 +123,13 @@
     const listen = view.recording
       ? `Listening to ${source} · ${view.elapsed}`
       : "Ready to listen";
-    const hear = view.lastLine
-      ? `“${clip(view.lastLine, 56)}”`
-      : view.recording
-        ? "Waiting for speech…"
-        : "Nothing heard yet";
+    const hear = view.partial
+      ? `“${clipStart(view.partial, 56)}”`
+      : view.lastLine
+        ? `“${clip(view.lastLine, 56)}”`
+        : view.recording
+          ? "Waiting for speech…"
+          : "Nothing heard yet";
     const answer =
       view.mode === "thinking"
         ? "Thinking…"
@@ -139,7 +147,7 @@
         : "listen";
     return [
       { key: "listen", text: listen },
-      { key: "hear", text: hear },
+      { key: "hear", text: hear, tail: Boolean(view.partial) },
       { key: "answer", text: answer },
     ].map((row) => ({ ...row, active: row.key === lit }));
   }

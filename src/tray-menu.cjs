@@ -23,6 +23,10 @@ const ANSWER_SPEEDS = [
   ["fast", "Fast"],
   ["best", "Best Quality"],
 ];
+const ENGINES = [
+  ["apple", "Live, Word by Word (Apple)"],
+  ["whisper", "Whisper, Phrase by Phrase"],
+];
 const LANGUAGES = [
   ["en", "English"],
   ["es", "Spanish"],
@@ -66,6 +70,25 @@ function modelItem(whisper = {}) {
     };
   }
   return { id: "model", label: "Download Speech Model…", enabled: true };
+}
+
+// Under the transcription choice: what Apple does for the speech language.
+function liveNote(interview) {
+  const settings = interview.settings || {};
+  const whisper = interview.whisper || {};
+  if (settings.speechEngine !== "apple") return [];
+  const language =
+    LANGUAGES.find(([code]) => code === settings.speechLanguage)?.[1] ||
+    "Detect Automatically";
+  const live = whisper.live?.language === settings.speechLanguage ? whisper.live : null;
+  const label = !live
+    ? `${language} Uses Whisper`
+    : live.installed
+      ? `${language} Is Live`
+      : Number.isFinite(whisper.liveProgress)
+        ? `Downloading ${language} for Live… ${Math.round(whisper.liveProgress * 100)}%`
+        : `${language} Goes Live After a Download`;
+  return [{ type: "separator" }, { label, enabled: false }];
 }
 
 function accountItems(ai = {}) {
@@ -170,6 +193,15 @@ function trayMenu(snapshot, platform = process.platform) {
         ...LANGUAGES,
       ]),
     },
+    ...(interview.whisper?.liveSupported
+      ? [
+          {
+            label: "Transcription",
+            enabled: !interview.recording,
+            submenu: [...radio("speechEngine", ENGINES), ...liveNote(interview)],
+          },
+        ]
+      : []),
     {
       label: "Speech Model",
       enabled: !interview.recording && interview.whisper?.status !== "loading",

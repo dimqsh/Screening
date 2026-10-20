@@ -1,9 +1,11 @@
 const fs = require("node:fs/promises");
+const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { safeStorage, dialog } = require("electron");
 const { Assistant } = require("./assistant.cjs");
 const { Transcription } = require("./transcription.cjs");
-const { hasAudioTap } = require("./macos.cjs");
+const { LiveSpeech } = require("./live-speech.cjs");
+const { hasAudioTap, hasLiveSpeech } = require("./macos.cjs");
 const {
   modelFiles,
   speechModel,
@@ -47,6 +49,8 @@ async function createInterview(
     notesEnabled: true,
     includeNotes: false,
     source: "system",
+    // Apple's live transcription where macOS has it for the language.
+    speechEngine: "apple",
     speechModel: defaultModelKey(),
     dock: "notch",
     position: null,
@@ -65,6 +69,7 @@ async function createInterview(
       "notesEnabled",
       "includeNotes",
       "source",
+      "speechEngine",
       "speechModel",
       "dock",
       "position",
@@ -118,6 +123,14 @@ async function createInterview(
       path.join(app.getPath("appData"), "Capture Lab", "codex"),
   });
   state.ai = ai.state;
+  const helper = (name) =>
+    app.isPackaged
+      ? path.join(process.resourcesPath, "bin", name)
+      : path.join(__dirname, "..", "..", "bin", name);
+  const live =
+    hasLiveSpeech() && existsSync(helper("live-speech"))
+      ? new LiveSpeech(helper("live-speech"))
+      : null;
   const whisper = new Transcription(
     process.env.CAPTURE_LAB_MODEL_CACHE ||
       path.join(app.getPath("userData"), "models"),
@@ -151,9 +164,10 @@ async function createInterview(
     },
     onLevel,
     speechModel(settings.speechModel),
-    { createWorker: createSpeechWorker },
+    { createWorker: createSpeechWorker, live },
   );
   state.whisper = whisper.state;
+  const listenOptions = () => ({ live: settings.speechEngine === "apple" });
   // A model already on disk counts as ready; it loads into memory on first use.
   async function markIfDownloaded() {
     try {
@@ -166,6 +180,8 @@ async function createInterview(
   }
   await ai.status();
   await markIfDownloaded();
+  // What Apple offers for the speech language; the menu shows it.
+  whisper.checkLive(settings.speechLanguage).catch(() => {});
   let saveQueue = Promise.resolve();
   async function save() {
     const { context, ...saved } = settings;
@@ -186,6 +202,7 @@ async function createInterview(
     if (["speechLanguage", "answerLanguage"].includes(key))
       return LANGUAGE_CODES.includes(value);
     if (key === "source") return ["system", "microphone"].includes(value);
+    if (key === "speechEngine") return ["apple", "whisper"].includes(value);
     if (key === "speechModel") return Object.hasOwn(SPEECH_MODELS, value);
     if (key === "dock") return ["notch", "float"].includes(value);
     if (key === "position")
@@ -232,6 +249,7 @@ async function createInterview(
     if (ai.state.busy) throw new Error("Stop the current answer first.");
     if (!ai.state.connected) throw new Error("Sign in with ChatGPT first.");
     const attachment = state.attachment;
+    if (!question.trim() && !attachment) await whisper.settle();
     const input =
       question.trim() ||
       (attachment
@@ -306,8 +324,11 @@ async function createInterview(
     if (op === "setting") {
       if (!payload || !validSetting(payload.key, payload.value))
         throw new Error("Invalid setting");
-      if (payload.key === "speechModel" && state.recording)
-        throw new Error("Stop listening to change the speech model.");
+      if (
+        ["speechModel", "speechEngine", "speechLanguage"].includes(payload.key) &&
+        state.recording
+      )
+        throw new Error("Stop listening to change how speech is transcribed.");
       settings[payload.key] = payload.value;
       await save();
       if (
@@ -315,6 +336,11 @@ async function createInterview(
         whisper.setModel(speechModel(payload.value))
       )
         await markIfDownloaded();
+      // Choosing a language Apple supports downloads it for next time.
+      if (["speechLanguage", "speechEngine"].includes(payload.key))
+        await whisper.checkLive(settings.speechLanguage, {
+          install: settings.speechEngine === "apple",
+        });
       update();
       return;
     }
@@ -371,7 +397,10 @@ async function createInterview(
         throw new Error("Invalid recording state");
       if (active && !whisper.state.ready)
         throw new Error("Load Whisper first.");
-      whisper.keepWarm(active);
+      if (active) await whisper.begin(settings.speechLanguage, listenOptions());
+      else await whisper.end();
+      // Whisper loads only when this session needs it.
+      whisper.keepWarm(active && whisper.state.engine === "whisper");
       state.recording = active;
       state.source = active ? source : null;
       state.startedAt = active ? Date.now() : state.startedAt;
@@ -382,21 +411,14 @@ async function createInterview(
       if (state.recording) throw new Error("Stop the current recording first.");
       state.source = "system";
       state.startedAt = Date.now();
-      whisper.keepWarm(true);
       // A Core Audio tap needs only System Audio Recording; ScreenCaptureKit,
       // used before macOS 14.2, needs screen recording.
-      const helper = hasAudioTap() ? "audio-tap" : "audio-sck";
-      try {
-        await whisper.startNative(
-          app.isPackaged
-            ? path.join(process.resourcesPath, "bin", helper)
-            : path.join(__dirname, "..", "..", "bin", helper),
-          settings.speechLanguage,
-        );
-      } catch (error) {
-        whisper.keepWarm(false);
-        throw error;
-      }
+      await whisper.startNative(
+        helper(hasAudioTap() ? "audio-tap" : "audio-sck"),
+        settings.speechLanguage,
+        listenOptions(),
+      );
+      whisper.keepWarm(whisper.state.engine === "whisper");
       return;
     }
     if (op === "stop") {
@@ -440,7 +462,7 @@ async function createInterview(
       if (!state.recording) throw new Error("Recording is stopped.");
       if (!(buffer instanceof ArrayBuffer))
         throw new Error("Invalid audio buffer");
-      whisper.feed(new Float32Array(buffer), settings.speechLanguage);
+      whisper.push(new Float32Array(buffer));
     },
     close() {
       closed = true;

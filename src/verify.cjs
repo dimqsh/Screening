@@ -86,6 +86,7 @@ module.exports = async function verify(ctx) {
         manual: island.dataset.hover === "true" || island.dataset.pinned === "true",
         view: document.querySelector(".view.active")?.id,
         answer: document.getElementById("answer").textContent,
+        live: document.querySelector("#transcript .line.live p")?.textContent || "",
         turns: document.getElementById("turn-count").textContent }; })()`);
 
   // Architecture
@@ -177,6 +178,8 @@ module.exports = async function verify(ctx) {
     const saved = {
       ready: whisper.ready,
       connected: ai.connected,
+      partial: whisper.partial,
+      engine: whisper.engine,
       messages: interview.state.messages,
       transcript: interview.state.transcript,
       recording: interview.state.recording,
@@ -185,7 +188,9 @@ module.exports = async function verify(ctx) {
     };
     whisper.ready = patch.ready ?? true;
     ai.connected = patch.connected ?? true;
-    const { ready, connected, ...rest } = patch;
+    whisper.partial = patch.partial ?? "";
+    whisper.engine = patch.partial ? "apple" : whisper.engine;
+    const { ready, connected, partial, ...rest } = patch;
     Object.assign(interview.state, rest);
     publish();
     await delay(250);
@@ -202,7 +207,9 @@ module.exports = async function verify(ctx) {
     } finally {
       whisper.ready = saved.ready;
       ai.connected = saved.connected;
-      const { ready: r, connected: c, ...others } = saved;
+      whisper.partial = saved.partial;
+      whisper.engine = saved.engine;
+      const { ready: r, connected: c, partial: p, engine: e, ...others } = saved;
       Object.assign(interview.state, others);
       publish();
       await delay(400);
@@ -280,12 +287,17 @@ module.exports = async function verify(ctx) {
       source: "system",
       startedAt: Date.now() - 83000,
       transcript: heard,
+      // Apple's words for the sentence still being spoken.
+      partial: "And how would you scale it to ten times the traffic",
     },
     `${pin}; document.querySelector('[data-tab="transcript"]').click()`,
   );
   await js(`${pin}; document.querySelector('[data-tab="answer"]').click()`);
   check("The transcript tab shows what was heard", () =>
     assert.equal(transcriptView.view, "view-transcript"),
+  );
+  check("Live words show under the transcript while someone speaks", () =>
+    assert.equal(transcriptView.live, "And how would you scale it to ten times the traffic"),
   );
   const thinking = await scene("thinking", {
     transcript: heard,
@@ -478,20 +490,44 @@ module.exports = async function verify(ctx) {
     }
     assert.equal(interview.state.whisper.ready, true);
     const raw = await fs.readFile(process.env.CAPTURE_LAB_TEST_AUDIO);
-    await interview.request("recording", true);
-    // Audio is queued for Whisper; the words arrive in the transcript.
-    await interview.audio(
-      raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
-    );
-    await until(
-      () => interview.state.transcript.some((t) => /country/i.test(t.text)),
-      60000,
-      "Whisper did not transcribe the sample",
-    );
-    await interview.request("stop");
-    check("Real Whisper audio reaches the transcript", () =>
-      assert.ok(interview.state.transcript.length),
-    );
+    // Apple's live transcription where this Mac has it, then Whisper, which
+    // every Mac and Windows PC can use.
+    const savedEngine = interview.state.settings.speechEngine;
+    const engines = interview.state.whisper.live?.installed ? ["apple", "whisper"] : ["whisper"];
+    for (const engine of engines) {
+      await interview.request("setting", { key: "speechEngine", value: engine });
+      await interview.request("clear");
+      await interview.request("recording", true);
+      const used = interview.state.whisper.engine;
+      // The whole sample arrives at once; the words reach the transcript.
+      await interview.audio(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+      let partial = "";
+      await until(
+        () => {
+          partial ||= interview.state.whisper.partial;
+          return interview.state.transcript.some((t) => /country/i.test(t.text));
+        },
+        60000,
+        `${engine} did not transcribe the sample`,
+      );
+      await interview.request("stop");
+      if (engine === "apple") {
+        check("Apple's live transcription reaches the transcript", () => {
+          assert.equal(used, "apple");
+          assert.match(interview.state.transcript.map((t) => t.text).join(" "), /fellow Americans.*country/i);
+        });
+        check("Apple's words show before they are final", () => assert.match(partial, /\w/));
+      } else
+        check("Real Whisper audio reaches the transcript", () => {
+          assert.equal(used, "whisper");
+          assert.ok(interview.state.transcript.length);
+        });
+      check(`Stopping ${engine === "apple" ? "Apple's transcription" : "Whisper"} clears the live words`, () => {
+        assert.equal(interview.state.whisper.partial, "");
+        assert.equal(interview.state.whisper.engine, null);
+      });
+    }
+    await interview.request("setting", { key: "speechEngine", value: savedEngine });
     await delay(300);
     const rendered = await js(`document.getElementById("transcript").textContent`);
     check("The transcript reaches Buddy", () => assert.match(rendered, /country/i));
@@ -548,6 +584,16 @@ module.exports = async function verify(ctx) {
       setHidden(false);
       await delay(800);
       check("Audio level reaches Buddy", () => assert.ok(audioControl.peak > 0.02));
+      if (interview.state.whisper.engine === "apple") {
+        let words = "";
+        for (let i = 0; i < 40 && !words; i++) {
+          words = await js(`document.querySelector("#transcript .line.live p")?.textContent || ""`);
+          if (!words) await delay(100);
+        }
+        check("Buddy shows the microphone's words while they are spoken", () =>
+          assert.match(words, /\w/),
+        );
+      }
       await shot("buddy-listening-live.png");
       const live = await js(
         `document.querySelector('[data-source="microphone"]').classList.contains("live")`,
@@ -560,7 +606,7 @@ module.exports = async function verify(ctx) {
         .slice(previousCount)
         .map((item) => item.text)
         .join(" ");
-      check("Stopping flushes the last seconds through real Whisper", () =>
+      check("Stopping keeps the last words", () =>
         assert.match(tail, /fellow|Americans|country/i),
       );
       await delay(300);

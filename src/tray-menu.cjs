@@ -1,6 +1,7 @@
 // The menu-bar menu, built from the shared snapshot. Pure, so it is unit tested;
 // main.cjs turns item ids into actions.
 const { SPEECH_MODELS, formatSize } = require("./services/speech-model.cjs");
+const { speechReady, LANGUAGES } = require("./buddy-model.js");
 const KEYS = {
   listen: "CommandOrControl+Shift+L",
   answer: "CommandOrControl+Shift+Enter",
@@ -27,24 +28,12 @@ const ENGINES = [
   ["apple", "Live, Word by Word (Apple)"],
   ["whisper", "Whisper, Phrase by Phrase"],
 ];
-const LANGUAGES = [
-  ["en", "English"],
-  ["es", "Spanish"],
-  ["zh", "Chinese"],
-  ["fr", "French"],
-  ["de", "German"],
-  ["ja", "Japanese"],
-  ["ru", "Russian"],
-  ["uk", "Ukrainian"],
-  ["kk", "Kazakh"],
-  ["tr", "Turkish"],
-];
 
 function status(snapshot) {
   const interview = snapshot.interview;
   if (!interview) return "Starting…";
   const missing = [
-    !interview.whisper?.ready && "speech model",
+    !speechReady(interview) && "speech model",
     !interview.ai?.connected && "ChatGPT sign-in",
   ].filter(Boolean);
   if (missing.length) return `Finish setup: ${missing.join(" and ")}`;
@@ -56,7 +45,8 @@ function status(snapshot) {
   return "Ready";
 }
 
-function modelItem(whisper = {}) {
+function modelItem(interview) {
+  const whisper = interview.whisper || {};
   if (whisper.ready)
     return { id: "model", label: "Speech Model Ready", enabled: false };
   if (whisper.status === "loading") {
@@ -69,7 +59,15 @@ function modelItem(whisper = {}) {
       enabled: false,
     };
   }
-  return { id: "model", label: "Download Speech Model…", enabled: true };
+  // With Apple's live transcription, Whisper covers Kazakh, automatic
+  // detection and a helper that stops.
+  return {
+    id: "model",
+    label: speechReady(interview)
+      ? "Download Whisper (Optional)…"
+      : "Download Speech Model…",
+    enabled: true,
+  };
 }
 
 // Under the transcription choice: what Apple does for the speech language.
@@ -107,7 +105,7 @@ function accountItems(ai = {}) {
 function trayMenu(snapshot, platform = process.platform) {
   const interview = snapshot.interview || {};
   const settings = interview.settings || {};
-  const ready = Boolean(interview.whisper?.ready);
+  const ready = speechReady(interview);
   const connected = Boolean(interview.ai?.connected);
   const answering = Boolean(interview.ai?.busy);
   const audioBusy = Boolean(snapshot.audioControl?.busy);
@@ -231,7 +229,7 @@ function trayMenu(snapshot, platform = process.platform) {
       snapshot.permissions.audio !== "granted")
       ? [{ id: "allow-access", label: "Allow Microphone and Call Audio…" }]
       : []),
-    modelItem(interview.whisper),
+    modelItem(interview),
     ...accountItems(interview.ai),
     { type: "separator" },
     { id: "export", label: "Export Session…" },

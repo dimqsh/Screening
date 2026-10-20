@@ -8,7 +8,7 @@ const { SPEECH_MODELS } = require("../src/services/speech-model.cjs");
 const { createResampler } = require("../src/segmenter.js");
 const { hasLiveSpeech } = require("../src/services/macos.cjs");
 const { trayMenu } = require("../src/tray-menu.cjs");
-const { deriveBuddy, buddyActivity } = require("../src/buddy-model.js");
+const { deriveBuddy, buddyActivity, speechReady } = require("../src/buddy-model.js");
 
 // A stand-in for the live-speech helper: it answers like the Swift program.
 function fakeHelper(script) {
@@ -204,6 +204,89 @@ test("Whisper takes over if Apple's helper stops during a session", async () => 
   stt.push(speech(2));
   await stt.end();
   assert.equal(sent.filter((m) => m.type === "transcribe").length, 1);
+  stt.close();
+});
+
+// A new install: Whisper has not been downloaded.
+function withoutWhisper(live) {
+  const texts = [];
+  const stt = new Transcription("/tmp/none", () => {}, (text) => texts.push(text), () => {}, SPEECH_MODELS.accurate, {
+    live,
+    createWorker: () => assert.fail("Whisper is not on disk"),
+  });
+  return { stt, texts };
+}
+const interviewOf = (stt, settings) => ({
+  settings: { speechEngine: "apple", speechLanguage: "en", ...settings },
+  whisper: stt.state,
+});
+
+test("Apple's live transcription lets a new install listen without Whisper", async () => {
+  const live = fakeLive();
+  const { stt, texts } = withoutWhisper(live);
+  assert.equal(speechReady(interviewOf(stt)), false);
+  await stt.checkLive("en");
+  assert.equal(speechReady(interviewOf(stt)), true);
+  assert.equal(deriveBuddy({ buddy: { enabled: true }, interview: { ...interviewOf(stt), ai: { connected: true } } }).mode, "idle");
+  await stt.begin("en");
+  assert.equal(stt.state.engine, "apple");
+  live.handlers.onFinal("Tell me about yourself.");
+  await stt.end();
+  assert.deepEqual(texts, ["Tell me about yourself.", "For your country."]);
+  stt.close();
+});
+
+test("without Whisper, a language or choice Apple cannot serve sends setup back to Whisper", async () => {
+  const kazakh = withoutWhisper(fakeLive(null));
+  await kazakh.stt.checkLive("kk");
+  assert.equal(speechReady(interviewOf(kazakh.stt, { speechLanguage: "kk" })), false);
+  await assert.rejects(kazakh.stt.begin("kk"), /Download the speech model before listening/);
+  kazakh.stt.close();
+
+  const english = withoutWhisper(fakeLive());
+  await english.stt.checkLive("en");
+  assert.equal(speechReady(interviewOf(english.stt, { speechEngine: "whisper" })), false);
+  await assert.rejects(english.stt.begin("en", { live: false }), /Download the speech model/);
+  english.stt.close();
+
+  // Windows and macOS before 26 have no live transcription at all.
+  const older = withoutWhisper(null);
+  assert.equal(await older.stt.checkLive("en"), null);
+  assert.equal(speechReady(interviewOf(older.stt)), false);
+  older.stt.close();
+});
+
+test("if Apple stops mid-session without Whisper, Buddy says so once and stays quiet", async () => {
+  const live = fakeLive();
+  const { stt, texts } = withoutWhisper(live);
+  await stt.begin("en");
+  live.handlers.onExit(new Error("crashed"));
+  assert.equal(stt.state.engine, null);
+  assert.match(stt.state.error, /Apple speech stopped: crashed/);
+  assert.match(stt.state.error, /Whisper/);
+  const error = stt.state.error;
+  stt.push(speech(2));
+  stt.push(new Float32Array(16000));
+  await wait();
+  assert.equal(stt.state.error, error);
+  assert.equal(live.written, 0);
+  await stt.end();
+  assert.deepEqual(texts, []);
+  stt.close();
+});
+
+test("an Apple language download shows progress from its start", async () => {
+  let finish;
+  const live = fakeLive({ locale: "es-ES", model: "speech", installed: false });
+  live.install = () => new Promise((resolve) => (finish = resolve));
+  const { stt } = withoutWhisper(live);
+  await stt.checkLive("es", { install: true });
+  assert.equal(stt.state.liveProgress, 0);
+  live.check = async () => ({ locale: "es-ES", model: "speech", installed: true });
+  finish();
+  await wait();
+  assert.equal(stt.state.liveProgress, null);
+  assert.equal(speechReady(interviewOf(stt, { speechLanguage: "es" })), true);
   stt.close();
 });
 

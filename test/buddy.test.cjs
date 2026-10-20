@@ -12,6 +12,8 @@ const {
   listTurns,
   buddyMood,
   buddyActivity,
+  speechReady,
+  speechStep,
 } = require("../src/buddy-model.js");
 const { trayMenu, findItem } = require("../src/tray-menu.cjs");
 
@@ -246,6 +248,92 @@ test("setup reports download progress and a pending browser sign-in", () => {
   assert.equal(view.modelProgress, 42);
   assert.equal(view.signingIn, true);
 });
+
+// macOS 26 with Apple's live transcription installed for English and no
+// Whisper model on disk.
+function appleOnly(settings = {}, whisper = {}) {
+  return snapshot({
+    interview: {
+      settings: { speechLanguage: "en", speechEngine: "apple", ...settings },
+      whisper: {
+        ready: false,
+        status: "idle",
+        liveSupported: true,
+        live: { language: "en", locale: "en-US", model: "speech", installed: true },
+        ...whisper,
+      },
+    },
+  });
+}
+test("Apple's live transcription for the speech language finishes the speech step", () => {
+  assert.equal(speechReady(appleOnly().interview), true);
+  const view = deriveBuddy(appleOnly());
+  assert.equal(view.mode, "idle");
+  assert.equal(view.needsWhisper, false);
+});
+test("setup asks for Whisper when Apple cannot transcribe the speech language", () => {
+  const cases = {
+    Kazakh: appleOnly({ speechLanguage: "kk" }, { live: null }),
+    "automatic detection": appleOnly({ speechLanguage: "auto" }, { live: null }),
+    "the Whisper choice": appleOnly({ speechEngine: "whisper" }),
+    "a language still being checked": appleOnly({ speechLanguage: "de" }),
+    "a language Apple has not downloaded": appleOnly(
+      {},
+      { live: { language: "en", locale: "en-US", model: "speech", installed: false } },
+    ),
+    "Windows and macOS before 26": appleOnly({}, { liveSupported: false, live: null }),
+  };
+  for (const [name, state] of Object.entries(cases)) {
+    assert.equal(speechReady(state.interview), false, name);
+    const view = deriveBuddy(state);
+    assert.equal(view.mode, "setup", name);
+    assert.equal(view.needsWhisper, true, name);
+  }
+  assert.equal(speechReady(appleOnly({ speechEngine: "whisper" }, { ready: true }).interview), true);
+});
+test("the speech step says Apple is ready and offers Whisper as optional", () => {
+  const apple = speechStep(appleOnly().interview, " 1.0 GB");
+  assert.equal(apple.done, true);
+  assert.equal(apple.optional, true);
+  assert.match(apple.text, /Apple .*English live/);
+  assert.match(apple.text, /Whisper .*optional/i);
+  assert.match(apple.text, /1\.0 GB/);
+  assert.match(apple.text, /Kazakh, automatic language detection/);
+  assert.deepEqual(speechStep(appleOnly({}, { ready: true }).interview, " 1.0 GB"), {
+    done: true,
+    optional: false,
+    text: "Ready. Speech stays on this computer.",
+  });
+});
+test("the speech step explains why Whisper is needed", () => {
+  const kazakh = speechStep(appleOnly({ speechLanguage: "kk" }, { live: null }).interview, " 1.0 GB");
+  assert.equal(kazakh.done, false);
+  assert.equal(kazakh.optional, false);
+  assert.match(kazakh.text, /Apple .* Kazakh/);
+  assert.match(kazakh.text, /One 1\.0 GB download\.$/);
+  const auto = speechStep(appleOnly({ speechLanguage: "auto" }, { live: null }).interview, "");
+  assert.match(auto.text, /automatic language detection/);
+  const spanish = speechStep(
+    appleOnly(
+      { speechLanguage: "es" },
+      { live: { language: "es", locale: "es-ES", model: "speech", installed: false }, liveProgress: 0.4 },
+    ).interview,
+    " 1.0 GB",
+  );
+  assert.equal(spanish.done, false);
+  assert.match(spanish.text, /Spanish .*40%/);
+  assert.match(spanish.text, /Whisper/);
+  const plain = "Turns the call into text on this computer. One 77 MB download.";
+  for (const state of [
+    appleOnly({ speechEngine: "whisper" }),
+    appleOnly({}, { liveSupported: false, live: null }),
+  ])
+    assert.deepEqual(speechStep(state.interview, " 77 MB"), {
+      done: false,
+      optional: false,
+      text: plain,
+    });
+});
 test("conversation turns pair each question with its answer", () => {
   const turns = listTurns([
     { id: 1, role: "user", text: "Q1", attachment: { name: "Editor" } },
@@ -341,6 +429,32 @@ test("menu shows model download progress and a signed-in account", () => {
   assert.equal(findItem(menu, "model").enabled, false);
   assert.equal(findItem(menu, "login").label, "Signed In to ChatGPT");
   assert.equal(findItem(menu, "login").enabled, false);
+});
+test("menu listens with Apple's live transcription before Whisper is downloaded", () => {
+  const whisper = {
+    ready: false,
+    status: "idle",
+    liveSupported: true,
+    live: { language: "en", locale: "en-US", model: "speech", installed: true },
+  };
+  const apple = trayMenu(
+    menuState({ interview: { settings: { speechEngine: "apple" }, whisper } }),
+    "darwin",
+  );
+  assert.equal(apple[0].label, "Ready");
+  assert.equal(findItem(apple, "listen-system").enabled, true);
+  assert.equal(findItem(apple, "listen-microphone").enabled, true);
+  assert.equal(findItem(apple, "model").label, "Download Whisper (Optional)…");
+  assert.equal(findItem(apple, "model").enabled, true);
+  for (const settings of [
+    { speechEngine: "whisper" },
+    { speechEngine: "apple", speechLanguage: "kk" },
+  ]) {
+    const menu = trayMenu(menuState({ interview: { settings, whisper } }), "darwin");
+    assert.equal(menu[0].label, "Finish setup: speech model");
+    assert.equal(findItem(menu, "listen-system").enabled, false);
+    assert.equal(findItem(menu, "model").label, "Download Speech Model…");
+  }
 });
 test("menu settings reflect the saved choices", () => {
   const menu = trayMenu(

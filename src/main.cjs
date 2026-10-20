@@ -22,7 +22,7 @@ const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
 const notchGeometry = require("./services/notch.cjs");
 const { trayMenu, KEYS } = require("./tray-menu.cjs");
-const { formatElapsed } = require("./buddy-model.js");
+const { formatElapsed, speechReady } = require("./buddy-model.js");
 const { speechModel } = require("./services/speech-model.cjs");
 const { lightSnapshot, engineSnapshot } = require("./services/snapshot.cjs");
 const { hasAudioTap, hasSystemPicker } = require("./services/macos.cjs");
@@ -351,7 +351,7 @@ async function audio(op, kind) {
   if (op === "start") {
     if (!["microphone", "system"].includes(kind))
       throw new Error("Invalid audio source");
-    if (!interview.state.whisper.ready)
+    if (!speechReady(interview.state))
       throw new Error("Download the speech model before listening.");
     if (interview.state.recording) throw new Error("Already listening.");
     audioControl.peak = 0;

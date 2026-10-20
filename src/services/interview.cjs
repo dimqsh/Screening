@@ -6,6 +6,7 @@ const { Assistant } = require("./assistant.cjs");
 const { Transcription } = require("./transcription.cjs");
 const { LiveSpeech } = require("./live-speech.cjs");
 const { hasAudioTap, hasLiveSpeech } = require("./macos.cjs");
+const { speechReady } = require("../buddy-model.js");
 const {
   modelFiles,
   speechModel,
@@ -178,10 +179,21 @@ async function createInterview(
       /* Setup offers the download. */
     }
   }
-  await ai.status();
   await markIfDownloaded();
-  // What Apple offers for the speech language; the menu shows it.
-  whisper.checkLive(settings.speechLanguage).catch(() => {});
+  // What Apple offers for the speech language decides whether setup still
+  // needs Whisper, so Buddy's first look waits for it, up to 5 seconds.
+  // Without Whisper on disk, Apple is the way to listen: its language
+  // downloads now, as it does when the language is chosen.
+  const liveChecked = whisper
+    .checkLive(settings.speechLanguage, {
+      install: settings.speechEngine === "apple" && !whisper.state.ready,
+    })
+    .catch(() => {});
+  await ai.status();
+  await Promise.race([
+    liveChecked,
+    new Promise((resolve) => setTimeout(resolve, 5000).unref()),
+  ]);
   let saveQueue = Promise.resolve();
   async function save() {
     const { context, ...saved } = settings;
@@ -395,8 +407,8 @@ async function createInterview(
         (active && !["microphone", "system"].includes(source))
       )
         throw new Error("Invalid recording state");
-      if (active && !whisper.state.ready)
-        throw new Error("Load Whisper first.");
+      if (active && !speechReady(state))
+        throw new Error("Download the speech model before listening.");
       if (active) await whisper.begin(settings.speechLanguage, listenOptions());
       else await whisper.end();
       // Whisper loads only when this session needs it.

@@ -9,6 +9,7 @@ const {
   desktopCapturer,
 } = require("electron");
 const { FLOAT } = require("./services/notch.cjs");
+const { speechReady } = require("./buddy-model.js");
 
 const QUESTION = "Tell me about a time you disagreed with your manager.";
 const STAR_ANSWER =
@@ -83,6 +84,9 @@ module.exports = async function verify(ctx) {
         compact: island.classList.contains("compact"),
         accessStep: !document.getElementById("step-access").hidden,
         accessDone: document.getElementById("step-access").classList.contains("done"),
+        speechDone: document.getElementById("step-model").classList.contains("done"),
+        speechText: document.getElementById("model-text").textContent,
+        speechOptional: !document.getElementById("model").classList.contains("primary"),
         manual: island.dataset.hover === "true" || island.dataset.pinned === "true",
         view: document.querySelector(".view.active")?.id,
         answer: document.getElementById("answer").textContent,
@@ -185,6 +189,7 @@ module.exports = async function verify(ctx) {
       recording: interview.state.recording,
       startedAt: interview.state.startedAt,
       source: interview.state.source,
+      settings: interview.state.settings,
     };
     whisper.ready = patch.ready ?? true;
     ai.connected = patch.connected ?? true;
@@ -251,6 +256,41 @@ module.exports = async function verify(ctx) {
         firstRun.microphone === "granted" && firstRun.audio === "granted",
       );
   });
+  // On macOS 26, Apple's live transcription can stand in for Whisper.
+  const appleOnly = speechReady({
+    ...interview.state,
+    whisper: { ...interview.state.whisper, ready: false },
+  });
+  check(
+    appleOnly
+      ? "Apple's live transcription finishes the speech step; Whisper is optional"
+      : "Setup offers the speech model download",
+    () => {
+      assert.equal(setup.speechDone, appleOnly);
+      assert.equal(setup.speechOptional, appleOnly);
+      assert.match(setup.speechText, appleOnly ? /Apple .* live.*optional/ : /download/i);
+    },
+  );
+  if (appleOnly) {
+    const whisperChoice = await scene(
+      "setup-whisper",
+      {
+        ready: false,
+        connected: false,
+        messages: [],
+        transcript: [],
+        settings: { ...interview.state.settings, speechEngine: "whisper" },
+      },
+      pin,
+    );
+    await js(pin);
+    check("Choosing Whisper asks for its download again", () => {
+      assert.equal(whisperChoice.mode, "setup");
+      assert.equal(whisperChoice.speechDone, false);
+      assert.equal(whisperChoice.speechOptional, false);
+      assert.match(whisperChoice.speechText, /download/i);
+    });
+  }
   await click("dismiss");
   const idle = await scene("idle", { messages: [], transcript: [], recording: false });
   check("Idle Buddy stays collapsed at the notch", () => {
@@ -494,10 +534,17 @@ module.exports = async function verify(ctx) {
     // every Mac and Windows PC can use.
     const savedEngine = interview.state.settings.speechEngine;
     const engines = interview.state.whisper.live?.installed ? ["apple", "whisper"] : ["whisper"];
+    const downloaded = interview.state.whisper.ready;
     for (const engine of engines) {
       await interview.request("setting", { key: "speechEngine", value: engine });
       await interview.request("clear");
-      await interview.request("recording", true);
+      // Apple needs no Whisper model: listening starts as if none were on disk.
+      if (engine === "apple") interview.state.whisper.ready = false;
+      try {
+        await interview.request("recording", true);
+      } finally {
+        interview.state.whisper.ready = downloaded;
+      }
       const used = interview.state.whisper.engine;
       // The whole sample arrives at once; the words reach the transcript.
       await interview.audio(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
@@ -512,7 +559,7 @@ module.exports = async function verify(ctx) {
       );
       await interview.request("stop");
       if (engine === "apple") {
-        check("Apple's live transcription reaches the transcript", () => {
+        check("Apple's live transcription listens without Whisper and reaches the transcript", () => {
           assert.equal(used, "apple");
           assert.match(interview.state.transcript.map((t) => t.text).join(" "), /fellow Americans.*country/i);
         });

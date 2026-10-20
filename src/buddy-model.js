@@ -1,5 +1,5 @@
 // Buddy's view of the shared interview snapshot. Loaded as a classic script in
-// the Buddy window and required by the unit tests.
+// the Buddy window and required by the main process, the menu and the unit tests.
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
@@ -9,6 +9,69 @@
     const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
     const minutes = String(Math.floor(total / 60)).padStart(2, "0");
     return `${minutes}:${String(total % 60).padStart(2, "0")}`;
+  }
+
+  // Speech and answer languages, in the menu's order.
+  const LANGUAGES = [
+    ["en", "English"],
+    ["es", "Spanish"],
+    ["zh", "Chinese"],
+    ["fr", "French"],
+    ["de", "German"],
+    ["ja", "Japanese"],
+    ["ru", "Russian"],
+    ["uk", "Ukrainian"],
+    ["kk", "Kazakh"],
+    ["tr", "Turkish"],
+  ];
+
+  // Apple's live transcription is the choice and is installed for the speech
+  // language. Kazakh, automatic detection, Windows and macOS before 26 have none.
+  function liveReady(interview) {
+    const settings = interview?.settings || {};
+    const live = interview?.whisper?.live;
+    return (
+      settings.speechEngine === "apple" &&
+      Boolean(live?.installed) &&
+      live.language === settings.speechLanguage
+    );
+  }
+  // Listening needs Whisper on disk, or Apple's live transcription.
+  const speechReady = (interview) =>
+    Boolean(interview?.whisper?.ready) || liveReady(interview);
+
+  // Setup's speech step. `size` is Whisper's download, like " 1.0 GB".
+  function speechStep(interview, size = "") {
+    const whisper = interview?.whisper || {};
+    const settings = interview?.settings || {};
+    const step = (done, text, optional = false) => ({ done, optional, text });
+    const whisperSize = size ? ` (${size.trim()})` : "";
+    const download = `One${size} download.`;
+    if (whisper.ready) return step(true, "Ready. Speech stays on this computer.");
+    const name = LANGUAGES.find(([code]) => code === settings.speechLanguage)?.[1];
+    if (liveReady(interview))
+      return step(
+        true,
+        `Ready. Apple transcribes ${name} live on this Mac. Whisper${whisperSize} is optional, for Kazakh, automatic language detection and as a backup.`,
+        true,
+      );
+    if (whisper.liveSupported && settings.speechEngine === "apple") {
+      // What Apple offers is checked again after every language change.
+      if (!whisper.live)
+        return step(
+          false,
+          `Apple has no live transcription for ${name || "automatic language detection"}, so Whisper turns the call into text on this computer. ${download}`,
+        );
+      if (
+        whisper.live.language === settings.speechLanguage &&
+        Number.isFinite(whisper.liveProgress)
+      )
+        return step(
+          false,
+          `Apple is downloading ${name} for live transcription, ${Math.round(whisper.liveProgress * 100)}%. Or download Whisper${whisperSize} instead.`,
+        );
+    }
+    return step(false, `Turns the call into text on this computer. ${download}`);
   }
 
   function deriveBuddy(snapshot, { now = Date.now(), dismissedId = null } = {}) {
@@ -41,7 +104,7 @@
       source: interview?.source || null,
     };
     if (!snapshot?.buddy?.enabled) return { ...view, mode: "off" };
-    const needsWhisper = !interview?.whisper?.ready;
+    const needsWhisper = !speechReady(interview);
     const needsAccount = !interview?.ai?.connected;
     // Asked once on first run; after that, typing works even without access.
     const access = snapshot.permissions;
@@ -152,5 +215,14 @@
     ].map((row) => ({ ...row, active: row.key === lit }));
   }
 
-  return { deriveBuddy, formatElapsed, listTurns, buddyMood, buddyActivity };
+  return {
+    deriveBuddy,
+    formatElapsed,
+    listTurns,
+    buddyMood,
+    buddyActivity,
+    speechReady,
+    speechStep,
+    LANGUAGES,
+  };
 });

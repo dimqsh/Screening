@@ -253,7 +253,9 @@ class Transcription {
     return info;
   }
   installLive(language) {
-    if (!this.installing.has(language))
+    if (!this.installing.has(language)) {
+      // Setup and the menu show the download from its start.
+      this.update({ liveProgress: 0 });
       this.installing.set(
         language,
         this.live
@@ -265,6 +267,7 @@ class Transcription {
             if (this.state.live?.language === language) this.checkLive(language);
           }),
       );
+    }
     return this.installing.get(language);
   }
   // A listening session. Apple's live transcription writes words as they are
@@ -286,11 +289,22 @@ class Transcription {
               if (text) this.onText?.(text);
               session.settled?.();
             },
-            // The helper stopped on its own: Whisper takes over.
+            // The helper stopped on its own: Whisper takes over when it is
+            // on disk; otherwise the words stop until listening starts again.
             onExit: (error) => {
               if (session.done || session !== this.session) return;
+              const reason = `Apple speech stopped${error ? `: ${error.message}` : ""}`;
+              if (!this.state.ready) {
+                session.engine = null;
+                this.update({
+                  engine: null,
+                  partial: "",
+                  error: `${reason}. Stop and listen again, or download Whisper so it can take over.`,
+                });
+                return;
+              }
               this.useWhisper(session);
-              if (error) this.update({ error: `Apple speech stopped: ${error.message}` });
+              if (error) this.update({ error: reason });
             },
           });
           session.engine = "apple";
@@ -334,7 +348,7 @@ class Transcription {
     const session = this.session;
     if (!session) return;
     if (session.engine === "apple") this.live.write(samples);
-    else session.segmenter.push(samples);
+    else session.segmenter?.push(samples);
   }
   // Stopping keeps the last words: Apple settles them, Whisper gets the rest.
   end() {
@@ -343,7 +357,7 @@ class Transcription {
     this.session = null;
     this.ending = (async () => {
       if (session.engine === "apple") await this.live.stop();
-      else session.segmenter.flush();
+      else session.segmenter?.flush();
       session.done = true;
       this.update({ engine: null, partial: "" });
     })();

@@ -1,6 +1,7 @@
 // Buddy: the whole app, driven by the shared interview snapshot.
 const api = window.captureLab;
-const { deriveBuddy, listTurns, buddyMood, buddyActivity } = window.buddyModel;
+const { deriveBuddy, listTurns, buddyMood, buddyActivity, speechReady, speechStep } =
+  window.buddyModel;
 const $ = (id) => document.getElementById(id);
 const island = $("island");
 const panel = $("panel");
@@ -343,9 +344,12 @@ function downloadSize() {
 function renderSetup() {
   const whisper = current.interview.whisper;
   const ai = current.interview.ai;
-  $("step-model").classList.toggle("done", Boolean(whisper.ready));
+  const speech = speechStep(current.interview, downloadSize());
+  $("step-model").classList.toggle("done", speech.done);
   $("step-account").classList.toggle("done", Boolean(ai.connected));
   show($("model"), !whisper.ready);
+  // With Apple's live transcription, Whisper is an extra.
+  $("model").classList.toggle("primary", !speech.optional);
   prop($("model"), "disabled", Boolean(whisper.status === "loading"));
   setText(
     $("model"),
@@ -356,12 +360,7 @@ function renderSetup() {
   progress.classList.toggle("indeterminate", !Number.isFinite(whisper.progress));
   if (Number.isFinite(whisper.progress))
     setVar(progress, "--progress", `${whisper.progress}%`);
-  setText(
-    $("model-text"),
-    whisper.ready
-      ? "Ready. Speech stays on this computer."
-      : `Turns the call into text on this computer. One${downloadSize()} download.`,
-  );
+  setText($("model-text"), speech.text);
   show($("login"), !ai.connected);
   prop($("login"), "disabled", Boolean(ai.status === "signing-in"));
   setText($("login"), ai.status === "signing-in" ? "Waiting…" : "Sign in");
@@ -467,7 +466,7 @@ function render(snapshot) {
       "disabled",
       Boolean(
         audioBusy ||
-          !interview.whisper.ready ||
+          !speechReady(interview) ||
           (interview.recording && !live),
       ),
     );

@@ -214,7 +214,8 @@ function helperPath(name) {
     : path.join(__dirname, "..", "bin", name);
 }
 function syncBuddy() {
-  if (!alive(buddy)) return;
+  // A new Buddy window stays hidden until it has drawn; see replaceBuddy.
+  if (!alive(buddy) || retiring.length) return;
   const show = buddyShown();
   if (show && !buddy.isVisible()) buddy.showInactive();
   else if (!show && buddy.isVisible()) {
@@ -342,7 +343,31 @@ function change(key, value) {
 function apply() {
   for (const win of [buddy, engine])
     if (alive(win)) win.setContentProtection(state.protection);
+  if (
+    process.platform === "darwin" &&
+    !state.protection &&
+    alive(buddy) &&
+    buddy.isContentProtected()
+  )
+    replaceBuddy();
   publish();
+}
+// macOS 27 keeps a window hidden from screen sharing once it was hidden,
+// unless Screening may record the screen. A new window starts out visible, so
+// Buddy moves to one. The old window stays up until the new one has drawn.
+// The engine is never shown, so it keeps its window.
+let retiring = [];
+function replaceBuddy() {
+  endDrag(false);
+  retiring.push(buddy);
+  const next = (buddy = createBuddy(buddy.getBounds()));
+  next.once("ready-to-show", () => {
+    // A newer window may have replaced this one before it drew.
+    if (next !== buddy) return;
+    const old = retiring.splice(0);
+    publish();
+    for (const win of old) if (alive(win)) win.destroy();
+  });
 }
 
 async function audio(op, kind) {
@@ -397,6 +422,46 @@ function create(file, options) {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
   win.loadFile(path.join(__dirname, file));
+  return win;
+}
+function createBuddy(bounds) {
+  const win = create("buddy.html", {
+    title: "Screening — Buddy",
+    ...bounds,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    roundedCorners: false,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    // The meeting app keeps keyboard focus until a Buddy text field is used.
+    focusable: false,
+    acceptFirstMouse: true,
+    // Frameless windows may then sit over the menu bar, next to the notch.
+    enableLargerThanScreen: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hiddenInMissionControl: true,
+    type: process.platform === "darwin" ? "panel" : undefined,
+  });
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.setIgnoreMouseEvents(true, { forward: true });
+  if (process.platform === "darwin")
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.on("close", (event) => {
+    if (!quitting) {
+      event.preventDefault();
+      setHidden(true);
+    }
+  });
+  win.on("blur", () => {
+    if (alive(win) && win.isFocusable()) win.setFocusable(false);
+  });
+  win.webContents.on("did-finish-load", publish);
   return win;
 }
 
@@ -740,50 +805,13 @@ app
       skipTaskbar: true,
       focusable: false,
     });
-    const buddyBounds = await placeBuddy();
-    buddy = create("buddy.html", {
-      title: "Screening — Buddy",
-      ...buddyBounds,
-      frame: false,
-      transparent: true,
-      backgroundColor: "#00000000",
-      hasShadow: false,
-      roundedCorners: false,
-      resizable: false,
-      movable: true,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      // The meeting app keeps keyboard focus until a Buddy text field is used.
-      focusable: false,
-      acceptFirstMouse: true,
-      // Frameless windows may then sit over the menu bar, next to the notch.
-      enableLargerThanScreen: true,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      hiddenInMissionControl: true,
-      type: process.platform === "darwin" ? "panel" : undefined,
-    });
-    buddy.setAlwaysOnTop(true, "screen-saver");
-    buddy.setIgnoreMouseEvents(true, { forward: true });
-    if (process.platform === "darwin")
-      buddy.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    buddy.on("close", (event) => {
-      if (!quitting) {
-        event.preventDefault();
-        setHidden(true);
-      }
-    });
-    buddy.on("blur", () => {
-      if (alive(buddy) && buddy.isFocusable()) buddy.setFocusable(false);
-    });
+    buddy = createBuddy(await placeBuddy());
     for (const event of [
       "display-metrics-changed",
       "display-added",
       "display-removed",
     ])
       screen.on(event, () => placeBuddy().then(publish).catch(console.error));
-    buddy.webContents.on("did-finish-load", publish);
 
     interview = await require("./services/interview.cjs").createInterview(
       app,
@@ -919,7 +947,10 @@ app
       await delay(800);
       await require("./verify.cjs")({
         app,
-        buddy,
+        // Turning protection off can move Buddy to a new window.
+        get buddy() {
+          return buddy;
+        },
         engine,
         tray,
         interview,

@@ -19,6 +19,10 @@ const ANSWER_LENGTHS = [
   ["concise", "Short and Speakable"],
   ["detailed", "With Explanation"],
 ];
+const ANSWER_SPEEDS = [
+  ["fast", "Fast"],
+  ["best", "Best Quality"],
+];
 const LANGUAGES = [
   ["en", "English"],
   ["es", "Spanish"],
@@ -138,6 +142,7 @@ function trayMenu(snapshot, platform = process.platform) {
     { type: "separator" },
     { label: "Interview Type", submenu: radio("interviewType", INTERVIEW_TYPES) },
     { label: "Answer Length", submenu: radio("style", ANSWER_LENGTHS) },
+    { label: "Answer Speed", submenu: radio("answerSpeed", ANSWER_SPEEDS) },
     {
       id: "setting:autoAnswer",
       label: "Answer Automatically",

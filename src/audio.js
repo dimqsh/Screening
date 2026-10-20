@@ -5,8 +5,8 @@ window.audioCapture = (() => {
     processor,
     sink,
     source,
-    samples = [],
-    count = 0,
+    segmenter,
+    sending = Promise.resolve(),
     stopping = false,
     lastLevelAt = 0;
   const downsample = (input, from) => {
@@ -22,18 +22,19 @@ window.audioCapture = (() => {
     }
     return out;
   };
+  // Each phrase goes to Whisper as soon as the speaker pauses.
+  function send(phrase) {
+    const output = downsample(phrase, context.sampleRate);
+    if (output.length < 1600) return;
+    sending = sending
+      .then(() => window.captureLab.audio(output.buffer))
+      .catch((e) =>
+        window.dispatchEvent(new CustomEvent("audioerror", { detail: e.message })),
+      );
+  }
   async function flush() {
-    if (!count) return;
-    const input = new Float32Array(count);
-    let offset = 0;
-    for (const chunk of samples) {
-      input.set(chunk, offset);
-      offset += chunk.length;
-    }
-    samples = [];
-    count = 0;
-    const output = downsample(input, context.sampleRate);
-    if (output.length >= 1600) await window.captureLab.audio(output.buffer);
+    segmenter?.flush();
+    await sending;
   }
   async function stop() {
     if (stopping) return;
@@ -51,6 +52,7 @@ window.audioCapture = (() => {
     } finally {
       context = null;
       stream = null;
+      segmenter = null;
       stopping = false;
     }
   }
@@ -82,8 +84,10 @@ window.audioCapture = (() => {
       source.connect(processor);
       processor.connect(sink);
       sink.connect(context.destination);
-      samples = [];
-      count = 0;
+      segmenter = window.Segmenter.createSegmenter({
+        rate: context.sampleRate,
+        onSegment: send,
+      });
       await window.captureLab.request("recording", {
         active: true,
         source: kind,
@@ -101,14 +105,7 @@ window.audioCapture = (() => {
           );
           lastLevelAt = performance.now();
         }
-        samples.push(event.data);
-        count += event.data.length;
-        if (count >= context.sampleRate * 8)
-          flush().catch((e) =>
-            window.dispatchEvent(
-              new CustomEvent("audioerror", { detail: e.message }),
-            ),
-          );
+        segmenter.push(event.data);
       };
       stream.getAudioTracks()[0].addEventListener("ended", () => stop());
       await context.resume();

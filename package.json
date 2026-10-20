@@ -1,6 +1,6 @@
 {
   "name": "screening",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Interview answers at your MacBook notch, right under your camera. Local Whisper, ChatGPT answers, hidden from screen sharing.",
   "main": "src/main.cjs",
   "private": true,

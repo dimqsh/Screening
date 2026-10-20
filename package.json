@@ -83,6 +83,7 @@
           "to": "bin",
           "filter": [
             "capture-sck",
+            "capture-legacy",
             "audio-sck",
             "audio-tap",
             "notch-info",

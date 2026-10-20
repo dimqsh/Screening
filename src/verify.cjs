@@ -789,7 +789,9 @@ module.exports = async function verify(ctx) {
   const captureResults = [];
   if (has("--capture-test")) {
     captureResults.push(await runCapture("electron"));
-    if (process.platform === "darwin") captureResults.push(await runCapture("sck"));
+    if (process.platform === "darwin")
+      for (const capturePath of ["sck", "legacy"])
+        captureResults.push(await runCapture(capturePath));
     // The menu bar as screen capture sees it: the icon is there, Buddy is not.
     const display = screen.getPrimaryDisplay();
     if (process.platform === "darwin") {

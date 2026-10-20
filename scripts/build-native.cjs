@@ -14,9 +14,11 @@ const arch = { arm64: "arm64", x64: "x86_64" }[target];
 if (!arch) throw new Error(`Unsupported Mac architecture: ${target}`);
 fs.mkdirSync(path.join(root, "bin"), { recursive: true });
 // Core Audio process taps arrived in macOS 14.2, SpeechAnalyzer in macOS 26;
-// the rest run on 14.0.
+// macOS 15+ SDKs mark CGDisplayStream unavailable, so capture-legacy targets
+// macOS 13; the rest run on 14.0.
 const helpers = {
   "capture-sck": "14.0",
+  "capture-legacy": "13.0",
   "audio-sck": "14.0",
   "audio-tap": "14.2",
   "notch-info": "14.0",

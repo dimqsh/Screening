@@ -113,7 +113,7 @@ Audio, transcripts, answers, notes and snapshots stay in memory and are not save
 
 Buddy asks the operating system to leave it out of screen capture before it first appears. **Test Screen Sharing Protection** in the menu shows a synthetic card in Buddy and compares a magenta marker with protection off and on, on each capture path the system offers. A missing unprotected marker counts as inconclusive. Always check what the other person sees in your meeting app.
 
-Historical results: version 0.1.0 was tested with Google Meet sharing the whole built-in screen on macOS 27.0.1 and Chrome 155. Two connections joined from the same Mac showed the overlay with protection off and left it out with protection on. That was not a second physical device. Version 0.6.0 ran the A/B check on macOS 27: with protection on, both the Electron and the ScreenCaptureKit paths dropped Buddy’s marker. No private meeting screenshots are included in this repository.
+Historical results: version 0.1.0 was tested with Google Meet sharing the whole built-in screen on macOS 27.0.1 and Chrome 155. Two connections joined from the same Mac showed the overlay with protection off and left it out with protection on. That was not a second physical device. Version 0.6.0 ran the A/B check on macOS 27: with protection on, both the Electron and the ScreenCaptureKit paths dropped Buddy’s marker. On macOS 27 the test also tries the older CGDisplayStream capture, and that path still shows Buddy with protection on. Apps that use it, such as Telegram, show Buddy in calls, so hide Buddy before you share your screen there. No private meeting screenshots are included in this repository.
 
 The test captures the screen itself, so it is the one feature that asks for screen recording on macOS 15.
 

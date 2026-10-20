@@ -4,6 +4,7 @@ const {
   parseNotch,
   estimateNotch,
   islandLayout,
+  floatingLayout,
 } = require("../src/services/notch.cjs");
 const {
   deriveBuddy,
@@ -11,6 +12,8 @@ const {
   listTurns,
   buddyMood,
   buddyActivity,
+  speechReady,
+  speechStep,
 } = require("../src/buddy-model.js");
 const { trayMenu, findItem } = require("../src/tray-menu.cjs");
 
@@ -245,6 +248,92 @@ test("setup reports download progress and a pending browser sign-in", () => {
   assert.equal(view.modelProgress, 42);
   assert.equal(view.signingIn, true);
 });
+
+// macOS 26 with Apple's live transcription installed for English and no
+// Whisper model on disk.
+function appleOnly(settings = {}, whisper = {}) {
+  return snapshot({
+    interview: {
+      settings: { speechLanguage: "en", speechEngine: "apple", ...settings },
+      whisper: {
+        ready: false,
+        status: "idle",
+        liveSupported: true,
+        live: { language: "en", locale: "en-US", model: "speech", installed: true },
+        ...whisper,
+      },
+    },
+  });
+}
+test("Apple's live transcription for the speech language finishes the speech step", () => {
+  assert.equal(speechReady(appleOnly().interview), true);
+  const view = deriveBuddy(appleOnly());
+  assert.equal(view.mode, "idle");
+  assert.equal(view.needsWhisper, false);
+});
+test("setup asks for Whisper when Apple cannot transcribe the speech language", () => {
+  const cases = {
+    Kazakh: appleOnly({ speechLanguage: "kk" }, { live: null }),
+    "automatic detection": appleOnly({ speechLanguage: "auto" }, { live: null }),
+    "the Whisper choice": appleOnly({ speechEngine: "whisper" }),
+    "a language still being checked": appleOnly({ speechLanguage: "de" }),
+    "a language Apple has not downloaded": appleOnly(
+      {},
+      { live: { language: "en", locale: "en-US", model: "speech", installed: false } },
+    ),
+    "Windows and macOS before 26": appleOnly({}, { liveSupported: false, live: null }),
+  };
+  for (const [name, state] of Object.entries(cases)) {
+    assert.equal(speechReady(state.interview), false, name);
+    const view = deriveBuddy(state);
+    assert.equal(view.mode, "setup", name);
+    assert.equal(view.needsWhisper, true, name);
+  }
+  assert.equal(speechReady(appleOnly({ speechEngine: "whisper" }, { ready: true }).interview), true);
+});
+test("the speech step says Apple is ready and offers Whisper as optional", () => {
+  const apple = speechStep(appleOnly().interview, " 1.0 GB");
+  assert.equal(apple.done, true);
+  assert.equal(apple.optional, true);
+  assert.match(apple.text, /Apple .*English live/);
+  assert.match(apple.text, /Whisper .*optional/i);
+  assert.match(apple.text, /1\.0 GB/);
+  assert.match(apple.text, /Kazakh, automatic language detection/);
+  assert.deepEqual(speechStep(appleOnly({}, { ready: true }).interview, " 1.0 GB"), {
+    done: true,
+    optional: false,
+    text: "Ready. Speech stays on this computer.",
+  });
+});
+test("the speech step explains why Whisper is needed", () => {
+  const kazakh = speechStep(appleOnly({ speechLanguage: "kk" }, { live: null }).interview, " 1.0 GB");
+  assert.equal(kazakh.done, false);
+  assert.equal(kazakh.optional, false);
+  assert.match(kazakh.text, /Apple .* Kazakh/);
+  assert.match(kazakh.text, /One 1\.0 GB download\.$/);
+  const auto = speechStep(appleOnly({ speechLanguage: "auto" }, { live: null }).interview, "");
+  assert.match(auto.text, /automatic language detection/);
+  const spanish = speechStep(
+    appleOnly(
+      { speechLanguage: "es" },
+      { live: { language: "es", locale: "es-ES", model: "speech", installed: false }, liveProgress: 0.4 },
+    ).interview,
+    " 1.0 GB",
+  );
+  assert.equal(spanish.done, false);
+  assert.match(spanish.text, /Spanish .*40%/);
+  assert.match(spanish.text, /Whisper/);
+  const plain = "Turns the call into text on this computer. One 77 MB download.";
+  for (const state of [
+    appleOnly({ speechEngine: "whisper" }),
+    appleOnly({}, { liveSupported: false, live: null }),
+  ])
+    assert.deepEqual(speechStep(state.interview, " 77 MB"), {
+      done: false,
+      optional: false,
+      text: plain,
+    });
+});
 test("conversation turns pair each question with its answer", () => {
   const turns = listTurns([
     { id: 1, role: "user", text: "Q1", attachment: { name: "Editor" } },
@@ -341,6 +430,32 @@ test("menu shows model download progress and a signed-in account", () => {
   assert.equal(findItem(menu, "login").label, "Signed In to ChatGPT");
   assert.equal(findItem(menu, "login").enabled, false);
 });
+test("menu listens with Apple's live transcription before Whisper is downloaded", () => {
+  const whisper = {
+    ready: false,
+    status: "idle",
+    liveSupported: true,
+    live: { language: "en", locale: "en-US", model: "speech", installed: true },
+  };
+  const apple = trayMenu(
+    menuState({ interview: { settings: { speechEngine: "apple" }, whisper } }),
+    "darwin",
+  );
+  assert.equal(apple[0].label, "Ready");
+  assert.equal(findItem(apple, "listen-system").enabled, true);
+  assert.equal(findItem(apple, "listen-microphone").enabled, true);
+  assert.equal(findItem(apple, "model").label, "Download Whisper (Optional)…");
+  assert.equal(findItem(apple, "model").enabled, true);
+  for (const settings of [
+    { speechEngine: "whisper" },
+    { speechEngine: "apple", speechLanguage: "kk" },
+  ]) {
+    const menu = trayMenu(menuState({ interview: { settings, whisper } }), "darwin");
+    assert.equal(menu[0].label, "Finish setup: speech model");
+    assert.equal(findItem(menu, "listen-system").enabled, false);
+    assert.equal(findItem(menu, "model").label, "Download Speech Model…");
+  }
+});
 test("menu settings reflect the saved choices", () => {
   const menu = trayMenu(
     menuState({
@@ -371,12 +486,15 @@ const {
 const { Transcription } = require("../src/services/transcription.cjs");
 test("model files follow the dtype naming used by Transformers.js", () => {
   const base = modelFiles("/cache", { id: "onnx-community/whisper-base", dtype: "q8" });
+  // Paths use the platform separator, so the expected files are joined too.
+  const { join } = require("node:path");
+  const onnx = join("/cache", "onnx-community", "whisper-base", "onnx");
   assert.deepEqual(base, [
-    "/cache/onnx-community/whisper-base/onnx/encoder_model_quantized.onnx",
-    "/cache/onnx-community/whisper-base/onnx/decoder_model_merged_quantized.onnx",
+    join(onnx, "encoder_model_quantized.onnx"),
+    join(onnx, "decoder_model_merged_quantized.onnx"),
   ]);
   const q4 = modelFiles("/cache", { id: "onnx-community/whisper-small", dtype: "q4" });
-  assert.match(q4[0], /whisper-small\/onnx\/encoder_model_q4\.onnx$/);
+  assert.match(q4[0], /whisper-small[\\/]onnx[\\/]encoder_model_q4\.onnx$/);
   assert.throws(() => modelFiles("/cache", { id: "x/y", dtype: "unknown" }));
 });
 test("the speech model is multilingual and says how big its download is", () => {
@@ -385,10 +503,14 @@ test("the speech model is multilingual and says how big its download is", () => 
   assert.equal(modelFiles("/c").length, 2);
 });
 
-test("Apple Silicon defaults to the accurate model, other computers to the fast one", () => {
-  assert.equal(defaultModelKey("darwin", "arm64"), "accurate");
-  assert.equal(defaultModelKey("darwin", "x64"), "fast");
-  assert.equal(defaultModelKey("win32", "x64"), "fast");
+test("Apple Silicon with 16 GB or more defaults to the accurate model", () => {
+  const GB = 1024 ** 3;
+  assert.equal(defaultModelKey("darwin", "arm64", 16 * GB), "accurate");
+  assert.equal(defaultModelKey("darwin", "arm64", 18 * GB), "accurate");
+  // The accurate model holds about 2.4 GB while listening; on 8 GB it swaps.
+  assert.equal(defaultModelKey("darwin", "arm64", 8 * GB), "fast");
+  assert.equal(defaultModelKey("darwin", "x64", 32 * GB), "fast");
+  assert.equal(defaultModelKey("win32", "x64", 32 * GB), "fast");
   assert.ok(SPEECH_MODELS.accurate.downloadMB > SPEECH_MODELS.fast.downloadMB);
   assert.equal(speechModel("fast"), SPEECH_MODELS.fast);
   assert.equal(speechModel("nonsense"), speechModel(defaultModelKey()));
@@ -622,4 +744,115 @@ test("Buddy's activity shows listen, hear and answer with the current step lit",
   assert.equal(thinking[2].text, "Thinking…");
   assert.equal(thinking.find((row) => row.active).key, "answer");
   assert.equal(thinking.filter((row) => row.active).length, 1);
+});
+
+test("a floating Buddy starts at the top right and stays fully on screen", () => {
+  const display = {
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    workArea: { x: 0, y: 37, width: 1512, height: 945 },
+  };
+  const first = floatingLayout({ display });
+  assert.equal(first.window.width, 520);
+  assert.equal(first.window.y, 37 + 24);
+  assert.equal(first.window.x + first.window.width, 1512 - 24);
+  assert.equal(first.layout.floating, true);
+  assert.equal(first.layout.compact, true);
+  assert.equal(first.layout.hasNotch, false);
+  const placed = floatingLayout({ display, position: { x: 300, y: 200 } });
+  assert.deepEqual([placed.window.x, placed.window.y], [300, 200]);
+  const offscreen = floatingLayout({ display, position: { x: 5000, y: -400 } });
+  assert.equal(offscreen.window.x, 1512 - offscreen.window.width);
+  assert.equal(offscreen.window.y, 37);
+});
+test("narrow screens use the compact layout at the notch too", () => {
+  const wide = islandLayout({ display: notched, notch: { hasNotch: true, x: 666, width: 180, height: 32 } });
+  assert.equal(wide.layout.compact, false);
+  const small = islandLayout({
+    display: { ...plain, bounds: { x: 0, y: 0, width: 1280, height: 800 }, workArea: { x: 0, y: 25, width: 1280, height: 775 } },
+    notch: { hasNotch: false },
+  });
+  assert.equal(small.layout.compact, true);
+});
+test("menu offers floating Buddy and snapping it back", () => {
+  const docked = trayMenu(menuState(), "darwin");
+  assert.equal(findItem(docked, "toggle-dock").label, "Float Buddy");
+  const floating = trayMenu(menuState({ interview: { settings: { dock: "float" } } }), "darwin");
+  assert.equal(findItem(floating, "toggle-dock").label, "Snap Buddy to the Notch");
+});
+
+test("first run asks once for microphone and call audio access", () => {
+  const missing = snapshot({ permissions: { microphone: "not-determined", audio: "denied" } });
+  const view = deriveBuddy(missing);
+  assert.equal(view.mode, "setup");
+  assert.equal(view.needsAccess, true);
+  assert.equal(view.needsWhisper, false);
+  const asked = snapshot({
+    permissions: { microphone: "denied", audio: "denied" },
+    interview: { settings: { accessPrompted: true } },
+  });
+  assert.equal(deriveBuddy(asked).mode, "idle");
+  const granted = snapshot({ permissions: { microphone: "granted", audio: "granted" } });
+  assert.equal(deriveBuddy(granted).mode, "idle");
+  assert.equal(deriveBuddy(snapshot()).needsAccess, false);
+});
+
+test("menu offers access while the microphone or call audio is not allowed", () => {
+  const missing = trayMenu(
+    menuState({ permissions: { microphone: "granted", audio: "denied" } }),
+    "darwin",
+  );
+  assert.equal(findItem(missing, "allow-access").label, "Allow Microphone and Call Audio…");
+  const granted = trayMenu(
+    menuState({ permissions: { microphone: "granted", audio: "granted" } }),
+    "darwin",
+  );
+  assert.equal(findItem(granted, "allow-access"), null);
+  assert.equal(findItem(trayMenu(menuState(), "win32"), "allow-access"), null);
+});
+
+const { hasAudioTap, hasSystemPicker } = require("../src/services/macos.cjs");
+test("call audio uses a tap from macOS 14.2 and snapshots the picker from macOS 15", () => {
+  assert.equal(hasAudioTap("darwin", "23.1.0"), false);
+  assert.equal(hasAudioTap("darwin", "23.2.0"), true);
+  assert.equal(hasAudioTap("darwin", "27.0.0"), true);
+  assert.equal(hasAudioTap("win32", "10.0.26100"), false);
+  assert.equal(hasSystemPicker("darwin", "23.6.0"), false);
+  assert.equal(hasSystemPicker("darwin", "24.0.0"), true);
+  assert.equal(hasSystemPicker("win32", "10.0.26100"), false);
+});
+
+const { createSegmenter } = require("../src/segmenter.js");
+function tone(seconds, rate = 16000, level = 0.2) {
+  const out = new Float32Array(Math.round(seconds * rate));
+  for (let i = 0; i < out.length; i++) out[i] = level * Math.sin((2 * Math.PI * 220 * i) / rate);
+  return out;
+}
+const hush = (seconds, rate = 16000) => new Float32Array(Math.round(seconds * rate));
+function phrases(parts, options = {}) {
+  const seen = [];
+  const segmenter = createSegmenter({ rate: 16000, onSegment: (s) => seen.push(s.length / 16000), ...options });
+  // Feed in uneven blocks, as audio arrives in practice.
+  for (const part of parts) for (let i = 0; i < part.length; i += 1000) segmenter.push(part.subarray(i, i + 1000));
+  return { seen, segmenter };
+}
+test("live audio is cut into phrases at pauses, not fixed blocks", () => {
+  const { seen } = phrases([tone(2), hush(0.8), tone(1.5), hush(0.8)]);
+  assert.equal(seen.length, 2);
+  assert.ok(seen[0] >= 2 && seen[0] < 3, `first phrase ${seen[0]} s`);
+});
+test("a short answer ends after a longer pause, and silence alone sends nothing", () => {
+  assert.equal(phrases([tone(0.5), hush(0.8)]).seen.length, 0);
+  assert.equal(phrases([tone(0.5), hush(1.6)]).seen.length, 1);
+  assert.equal(phrases([hush(12)]).seen.length, 0);
+});
+test("a long stretch of speech is still cut every ten seconds", () => {
+  const { seen } = phrases([tone(25)]);
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every((s) => s <= 10.03)); // cut on a 30 ms frame boundary
+});
+test("stopping sends the speech that is left", () => {
+  const { seen, segmenter } = phrases([tone(1)]);
+  assert.equal(seen.length, 0);
+  segmenter.flush();
+  assert.equal(seen.length, 1);
 });

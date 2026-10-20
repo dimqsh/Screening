@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("captureLab", {
   action: (name) => ipcRenderer.invoke("lab:action", name),
   buddyMouse: (inside) => ipcRenderer.send("buddy:mouse", Boolean(inside)),
   keyboard: (on) => ipcRenderer.send("buddy:keyboard", Boolean(on)),
+  drag: (phase) =>
+    ipcRenderer.send("buddy:drag", phase === "start" ? "start" : "end"),
   onAsk: (callback) => {
     const listener = () => callback();
     ipcRenderer.on("buddy:ask", listener);

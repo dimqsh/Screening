@@ -1,5 +1,6 @@
 const {
   app,
+  utilityProcess,
   BrowserWindow,
   Menu,
   Tray,
@@ -12,6 +13,7 @@ const {
   nativeImage,
   clipboard,
   dialog,
+  shell,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
@@ -20,9 +22,10 @@ const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
 const notchGeometry = require("./services/notch.cjs");
 const { trayMenu, KEYS } = require("./tray-menu.cjs");
-const { formatElapsed } = require("./buddy-model.js");
+const { formatElapsed, speechReady } = require("./buddy-model.js");
 const { speechModel } = require("./services/speech-model.cjs");
 const { lightSnapshot, engineSnapshot } = require("./services/snapshot.cjs");
+const { hasAudioTap, hasSystemPicker } = require("./services/macos.cjs");
 
 app.setName("Screening");
 // Preserve settings and the model cache from versions named Capture Lab.
@@ -72,14 +75,78 @@ const permission = () =>
     ? systemPreferences.getMediaAccessStatus("screen")
     : "not-required";
 const buddyShown = () => (state.testing ? true : !state.hidden);
+// Microphone and call-audio access on macOS. Call audio uses a Core Audio
+// tap, whose permission only the tap helper can read, so that answer is
+// cached and re-read in the background at most every 15 seconds. Before
+// macOS 14.2 call audio goes through ScreenCaptureKit and screen recording.
+let accessCache = null;
+let callAudio = { status: "not-determined", at: 0, reading: null };
+function readCallAudio() {
+  if (!hasAudioTap()) return Promise.resolve();
+  callAudio.reading ??= execFile(helperPath("audio-tap"), ["--status"], { timeout: 5000 })
+    .then(({ stdout }) => stdout.trim(), () => "")
+    .then((value) => {
+      const status = ["granted", "denied"].includes(value) ? value : "not-determined";
+      const changed = status !== callAudio.status;
+      callAudio = { status, at: Date.now(), reading: null };
+      if (changed) {
+        accessCache = null;
+        publish();
+      }
+    });
+  return callAudio.reading;
+}
+function access() {
+  if (process.platform !== "darwin") return null;
+  if (accessCache && Date.now() - accessCache.at < 2000) return accessCache.value;
+  if (Date.now() - callAudio.at > 15000) readCallAudio();
+  const value = {
+    microphone: systemPreferences.getMediaAccessStatus("microphone"),
+    audio: hasAudioTap() ? callAudio.status : permission(),
+  };
+  accessCache = { at: Date.now(), value };
+  return value;
+}
+const SETTINGS_PANE = "x-apple.systempreferences:com.apple.preference.security";
+// Asks for everything Buddy needs in one go: the microphone, then call audio.
+// Both prompts have an Allow button. macOS cannot ask twice, so a denied item
+// opens its page; System Audio Recording Only sits on the screen recording page.
+async function allowAccess() {
+  if (process.platform !== "darwin") return;
+  if (systemPreferences.getMediaAccessStatus("microphone") === "not-determined")
+    await systemPreferences.askForMediaAccess("microphone");
+  if (hasAudioTap())
+    await execFile(helperPath("audio-tap"), ["--request"], { timeout: 120000 }).catch(() => {});
+  else if (permission() !== "granted")
+    await desktopCapturer
+      .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+      .catch(() => {});
+  await readCallAudio();
+  accessCache = null;
+  const now = access();
+  if (now.microphone === "denied")
+    await shell.openExternal(`${SETTINGS_PANE}?Privacy_Microphone`);
+  else if (now.audio !== "granted")
+    await shell.openExternal(`${SETTINGS_PANE}?Privacy_ScreenCapture`);
+  await interview.request("setting", { key: "accessPrompted", value: true });
+  publish();
+}
+// Buddy may start a window capture only right after the person presses
+// Snapshot, and the system picker then lets them choose what to share.
+let pickingUntil = 0;
+const buddyPicking = (contents) =>
+  contents === buddy?.webContents && Date.now() < pickingUntil;
 const snapshot = () => ({
   ...state,
   buddy: { enabled: !state.hidden, layout: buddyLayout },
   buddyVisible: !state.hidden,
+  permissions: access(),
   speechModel: speechModel(interview?.state.settings.speechModel),
   interview: interview?.state,
   audioControl,
   permission: permission(),
+  // Verification keeps Buddy's own window list, which a test can click.
+  systemPicker: hasSystemPicker() && !verification,
   supported: ["darwin", "win32"].includes(process.platform),
 });
 // Each window gets only what it uses: Buddy no full images, the engine one flag.
@@ -105,6 +172,42 @@ function report(error) {
 }
 const attempt = (fn) => () => Promise.resolve().then(fn).catch(report);
 
+// Whisper runs in its own process at a lower CPU priority, so the meeting app
+// and Buddy stay responsive while it transcribes, and killing it on unload
+// returns all of its memory to the system.
+function createSpeechWorker(workerData) {
+  const child = utilityProcess.fork(
+    path.join(__dirname, "services", "whisper-worker.cjs"),
+    [JSON.stringify(workerData)],
+    { serviceName: "Screening speech", stdio: "ignore" },
+  );
+  const listeners = { message: [], error: [] };
+  let stopped = false;
+  child.once("spawn", () => {
+    try {
+      os.setPriority(child.pid, 10);
+    } catch {
+      /* Priority is a refinement; transcription works without it. */
+    }
+  });
+  child.on("message", (message) =>
+    listeners.message.forEach((listener) => listener(message)),
+  );
+  child.on("exit", (code) => {
+    if (!stopped && code !== 0)
+      listeners.error.forEach((listener) =>
+        listener(new Error(`The speech process stopped (code ${code}).`)),
+      );
+  });
+  return {
+    on: (event, listener) => listeners[event]?.push(listener),
+    postMessage: (message) => child.postMessage(message),
+    terminate: () => {
+      stopped = true;
+      child.kill();
+    },
+  };
+}
 function helperPath(name) {
   return app.isPackaged
     ? path.join(process.resourcesPath, "bin", name)
@@ -121,7 +224,23 @@ function syncBuddy() {
     buddy.setIgnoreMouseEvents(true, { forward: true });
   }
 }
+let placedBounds = null;
+function setBuddyBounds(bounds) {
+  placedBounds = bounds;
+  buddy.setBounds(bounds);
+}
 async function placeBuddy() {
+  const settings = interview?.state.settings;
+  if (settings?.dock === "float") {
+    const position = settings.position;
+    const display = position
+      ? screen.getDisplayNearestPoint(position)
+      : screen.getPrimaryDisplay();
+    const placed = notchGeometry.floatingLayout({ display, position });
+    buddyLayout = placed.layout;
+    if (alive(buddy) && !state.testing) setBuddyBounds(placed.window);
+    return placed.window;
+  }
   const display = screen.getPrimaryDisplay();
   const notch = await notchGeometry.detectNotch({
     display,
@@ -130,8 +249,50 @@ async function placeBuddy() {
   });
   const placed = notchGeometry.islandLayout({ display, notch });
   buddyLayout = placed.layout;
-  if (alive(buddy) && !state.testing) buddy.setBounds(placed.window);
+  if (alive(buddy) && !state.testing) setBuddyBounds(placed.window);
   return placed.window;
+}
+// Dragging Buddy by its top bar follows the cursor; letting go after a move
+// detaches it from the notch and remembers where it was left.
+let drag = null;
+function startDrag() {
+  endDrag(false);
+  const cursor = screen.getCursorScreenPoint();
+  const bounds = buddy.getBounds();
+  drag = {
+    dx: cursor.x - bounds.x,
+    dy: cursor.y - bounds.y,
+    start: cursor,
+    moved: false,
+    timer: setInterval(() => {
+      const point = screen.getCursorScreenPoint();
+      if (!drag.moved && Math.hypot(point.x - drag.start.x, point.y - drag.start.y) < 4)
+        return;
+      drag.moved = true;
+      buddy.setPosition(point.x - drag.dx, point.y - drag.dy);
+    }, 16),
+    // A drag can never outlive a lost pointer-up for long.
+    limit: setTimeout(() => endDrag(true), 20000),
+  };
+}
+async function endDrag(save = true) {
+  if (!drag) return;
+  clearInterval(drag.timer);
+  clearTimeout(drag.limit);
+  const moved = drag.moved;
+  drag = null;
+  if (!save || !moved) return;
+  const bounds = buddy.getBounds();
+  const x = bounds.x + Math.round((bounds.width - notchGeometry.FLOAT.width) / 2);
+  await interview.request("setting", { key: "position", value: { x, y: bounds.y } });
+  await interview.request("setting", { key: "dock", value: "float" });
+  await placeBuddy();
+  publish();
+}
+async function setDock(dock) {
+  await interview.request("setting", { key: "dock", value: dock });
+  await placeBuddy();
+  publish();
 }
 function setHidden(hidden) {
   state.hidden = hidden;
@@ -190,7 +351,7 @@ async function audio(op, kind) {
   if (op === "start") {
     if (!["microphone", "system"].includes(kind))
       throw new Error("Invalid audio source");
-    if (!interview.state.whisper.ready)
+    if (!speechReady(interview.state))
       throw new Error("Download the speech model before listening.");
     if (interview.state.recording) throw new Error("Already listening.");
     audioControl.peak = 0;
@@ -458,6 +619,9 @@ async function runMenu(id) {
     answer: () => interview.request("answer", ""),
     ask,
     "toggle-buddy": () => setHidden(!state.hidden),
+    "allow-access": allowAccess,
+    "toggle-dock": () =>
+      setDock(interview.state.settings.dock === "float" ? "notch" : "float"),
     protection: () => change("protection", !state.protection),
     "capture-test": captureTest,
     model: () => interview.request("model"),
@@ -512,6 +676,8 @@ app
   .whenReady()
   .then(async () => {
     if (process.platform === "darwin") app.dock?.hide();
+    // Buddy's first look already knows whether call audio is allowed.
+    await readCallAudio();
     ipcMain.handle("lab:state", (event) =>
       event.senderFrame === engine?.webContents.mainFrame
         ? engineSnapshot(snapshot())
@@ -520,17 +686,19 @@ app
     session.defaultSession.setPermissionRequestHandler(
       (contents, permission, callback, details) => {
         callback(
-          contents === engine?.webContents &&
-            permission === "media" &&
-            details.mediaTypes?.every((t) => t === "audio"),
+          permission === "media" &&
+            ((contents === engine?.webContents &&
+              details.mediaTypes?.every((t) => t === "audio")) ||
+              // A window capture asks for media with no camera or microphone.
+              (buddyPicking(contents) && !details.mediaTypes?.length)),
         );
       },
     );
     session.defaultSession.setPermissionCheckHandler(
       (contents, permission, _origin, details) =>
-        contents === engine?.webContents &&
         permission === "media" &&
-        details.mediaType === "audio",
+        ((contents === engine?.webContents && details.mediaType === "audio") ||
+          buddyPicking(contents)),
     );
     session.defaultSession.setDisplayMediaRequestHandler(
       async (request, callback) => {
@@ -552,6 +720,8 @@ app
           callback(null);
         }
       },
+      // On macOS 15+ Buddy's snapshots go through the system window picker.
+      { useSystemPicker: true },
     );
     session.defaultSession.webRequest.onBeforeRequest((details, callback) =>
       callback({ cancel: /^https?:|^wss?:/.test(details.url) }),
@@ -580,7 +750,7 @@ app
       hasShadow: false,
       roundedCorners: false,
       resizable: false,
-      movable: false,
+      movable: true,
       minimizable: false,
       maximizable: false,
       fullscreenable: false,
@@ -627,8 +797,11 @@ app
           ]),
         getNotes: () => state.notes,
         onLevel: publishAudioLevel,
+        createSpeechWorker,
       },
     );
+    // Saved settings may say Buddy floats somewhere; place it there now.
+    await placeBuddy();
     audioRouting = new (require("./services/audio-routing.cjs").AudioRouting)(
       (command) => engine.webContents.send("audio:command", command),
     );
@@ -675,6 +848,12 @@ app
         return;
       buddy.setIgnoreMouseEvents(!inside, { forward: true });
     });
+    ipcMain.on("buddy:drag", (event, phase) => {
+      if (event.senderFrame !== buddy.webContents.mainFrame || state.testing)
+        return;
+      if (phase === "start") startDrag();
+      else endDrag(true).catch(report);
+    });
     ipcMain.on("buddy:keyboard", (event, on) => {
       if (event.senderFrame !== buddy.webContents.mainFrame) return;
       on ? takeKeyboard() : releaseKeyboard();
@@ -694,6 +873,14 @@ app
     ipcMain.handle("interview:request", async (event, op, payload) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
       if (op === "audio-start") return audio("start", payload);
+      if (op === "allow-access") return allowAccess();
+      if (op === "pick-window") {
+        if (event.senderFrame !== buddy?.webContents.mainFrame)
+          throw new Error("Only Buddy can take a snapshot.");
+        pickingUntil = Date.now() + 120000;
+        return;
+      }
+      if (op === "window-image") pickingUntil = 0;
       if (op === "audio-stop") return audio("stop");
       if (["recording", "stop", "audio-error"].includes(op)) {
         if (!fromEngine(event))
@@ -748,6 +935,8 @@ app
         audio,
         runCapture,
         permission,
+        setDock,
+        access,
         delay,
       });
       if (!process.argv.includes("--keep-open")) app.quit();

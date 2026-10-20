@@ -1,6 +1,6 @@
 {
   "name": "screening",
-  "version": "0.6.0",
+  "version": "0.7.2",
   "description": "Interview answers at your MacBook notch, right under your camera. Local Whisper, ChatGPT answers, hidden from screen sharing.",
   "main": "src/main.cjs",
   "private": true,
@@ -10,7 +10,7 @@
     "verify": "electron . --verify",
     "verify:capture": "electron . --verify --capture-test",
     "package:mac": "npm run build:native && node scripts/prepare-runtime.cjs && electron-builder --mac dmg --arm64 --publish never",
-    "test": "node --test test/unit.test.cjs test/buddy.test.cjs",
+    "test": "node --test test/unit.test.cjs test/buddy.test.cjs test/live-speech.test.cjs",
     "package:win": "node scripts/prepare-runtime.cjs && electron-builder --win nsis --x64 --publish never",
     "verify:interview": "electron . --verify --interview-test",
     "verify:audio": "electron . --verify --interview-test --audio-test"
@@ -69,7 +69,7 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Screening transcribes your microphone on this computer while you listen.",
         "NSAudioCaptureUsageDescription": "Screening transcribes the call audio you choose, on this computer.",
-        "NSScreenCaptureUsageDescription": "Screening snapshots a window only when you ask, and uses screen access for call audio and the screen sharing test.",
+        "NSScreenCaptureUsageDescription": "Screening uses screen access for the screen sharing test, and on macOS 14 for snapshots and call audio.",
         "LSUIElement": true
       },
       "extraResources": [
@@ -79,7 +79,9 @@
           "filter": [
             "capture-sck",
             "audio-sck",
-            "notch-info"
+            "audio-tap",
+            "notch-info",
+            "live-speech"
           ]
         }
       ],

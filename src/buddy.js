@@ -1,6 +1,7 @@
 // Buddy: the whole app, driven by the shared interview snapshot.
 const api = window.captureLab;
-const { deriveBuddy, listTurns, buddyMood, buddyActivity } = window.buddyModel;
+const { deriveBuddy, listTurns, buddyMood, buddyActivity, speechReady, speechStep } =
+  window.buddyModel;
 const $ = (id) => document.getElementById(id);
 const island = $("island");
 const panel = $("panel");
@@ -134,8 +135,15 @@ function isOpen() {
   const auto = seenTurn !== mutedTurn && now < autoUntil;
   return manual() || auto || now < flash.until;
 }
+let morphTimer = null;
 function layout() {
   const open = isOpen();
+  // Only opening and closing animate the height; content changes do not.
+  if (open !== island.classList.contains("open")) {
+    island.classList.add("morph");
+    clearTimeout(morphTimer);
+    morphTimer = setTimeout(() => island.classList.remove("morph"), 480);
+  }
   island.classList.toggle("open", open);
   island.classList.toggle(
     "glance",
@@ -264,37 +272,67 @@ function renderAnswerView() {
   prop($("copy"), "disabled", Boolean(!turn?.answer));
 }
 
+function transcriptRow(time, text) {
+  const row = document.createElement("div");
+  row.className = "line";
+  const stamp = document.createElement("time");
+  stamp.textContent = new Date(time).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const words = document.createElement("p");
+  words.textContent = text;
+  row.append(stamp, words);
+  return row;
+}
+
+// Final lines, then Apple's words so far, which change while someone speaks.
 function renderTranscript() {
-  const transcript = current.interview.transcript || [];
-  const key = JSON.stringify(transcript.map((item) => item.id));
-  if (key === transcriptKey) return;
-  transcriptKey = key;
+  const interview = current.interview;
+  const transcript = interview.transcript || [];
+  const partial = interview.recording ? interview.whisper?.partial || "" : "";
   const target = $("transcript");
-  if (!transcript.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty-text";
-    empty.textContent = current.interview.recording
-      ? "Listening. The first line appears in a few seconds."
-      : "Nothing heard yet. Press Call audio or Microphone to start.";
-    target.replaceChildren(empty);
-    return;
+  const following = target.scrollHeight - target.scrollTop - target.clientHeight < 32;
+  const key = JSON.stringify(transcript.map((item) => item.id));
+  if (key !== transcriptKey) {
+    transcriptKey = key;
+    target.replaceChildren(...transcript.map((item) => transcriptRow(item.time, item.text)));
   }
-  target.replaceChildren(
-    ...transcript.map((item) => {
-      const row = document.createElement("div");
-      row.className = "line";
-      const time = document.createElement("time");
-      time.textContent = new Date(item.time).toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      });
-      const text = document.createElement("p");
-      text.textContent = item.text;
-      row.append(time, text);
-      return row;
-    }),
+  let live = target.querySelector(".line.live");
+  if (partial && !live) {
+    live = transcriptRow(Date.now(), "");
+    live.classList.add("live");
+    target.append(live);
+  }
+  if (live && partial) setText(live.querySelector("p"), partial);
+  else live?.remove();
+  let empty = target.querySelector(".empty-text");
+  if (!transcript.length && !partial) {
+    if (!empty) {
+      empty = document.createElement("p");
+      empty.className = "empty-text";
+      target.append(empty);
+    }
+    setText(
+      empty,
+      !interview.recording
+        ? "Nothing heard yet. Press Call audio or Microphone to start."
+        : interview.whisper?.engine === "apple"
+          ? "Listening. Words appear as they are spoken."
+          : "Listening. The first line appears in a few seconds.",
+    );
+  } else empty?.remove();
+  if (following) target.scrollTop = target.scrollHeight;
+  const whisper = interview.whisper || {};
+  const wordByWord = interview.recording
+    ? whisper.engine === "apple"
+    : interview.settings?.speechEngine === "apple" && Boolean(whisper.live?.installed);
+  setText(
+    $("transcript-hint"),
+    wordByWord
+      ? "Words appear as they are spoken. Answers use finished sentences."
+      : "New lines arrive after each pause.",
   );
-  target.scrollTop = target.scrollHeight;
 }
 
 function downloadSize() {
@@ -306,9 +344,12 @@ function downloadSize() {
 function renderSetup() {
   const whisper = current.interview.whisper;
   const ai = current.interview.ai;
-  $("step-model").classList.toggle("done", Boolean(whisper.ready));
+  const speech = speechStep(current.interview, downloadSize());
+  $("step-model").classList.toggle("done", speech.done);
   $("step-account").classList.toggle("done", Boolean(ai.connected));
   show($("model"), !whisper.ready);
+  // With Apple's live transcription, Whisper is an extra.
+  $("model").classList.toggle("primary", !speech.optional);
   prop($("model"), "disabled", Boolean(whisper.status === "loading"));
   setText(
     $("model"),
@@ -319,12 +360,7 @@ function renderSetup() {
   progress.classList.toggle("indeterminate", !Number.isFinite(whisper.progress));
   if (Number.isFinite(whisper.progress))
     setVar(progress, "--progress", `${whisper.progress}%`);
-  setText(
-    $("model-text"),
-    whisper.ready
-      ? "Ready. Speech stays on this computer."
-      : `Turns the call into text on this computer. One${downloadSize()} download.`,
-  );
+  setText($("model-text"), speech.text);
   show($("login"), !ai.connected);
   prop($("login"), "disabled", Boolean(ai.status === "signing-in"));
   setText($("login"), ai.status === "signing-in" ? "Waiting…" : "Sign in");
@@ -336,6 +372,22 @@ function renderSetup() {
         ? "Finish signing in in your browser, then come back."
         : "Answers come from your ChatGPT plan. Sign in once in your browser.",
   );
+  const access = current.permissions;
+  show($("step-access"), Boolean(access));
+  if (access) {
+    const allowed =
+      access.microphone === "granted" && access.audio === "granted";
+    $("step-access").classList.toggle("done", allowed);
+    show($("access"), !allowed);
+    prop($("access"), "disabled", askingAccess);
+    setText($("access"), askingAccess ? "Waiting…" : "Allow");
+    setText(
+      $("access-text"),
+      allowed
+        ? "Allowed. I can hear you and the call."
+        : "Lets me hear you and the call. macOS asks once for each.",
+    );
+  }
   keys($("setup-keys"));
 }
 
@@ -354,6 +406,8 @@ function render(snapshot) {
     setVar(island, "--notch-h", `${geometry.notchHeight}px`);
     setVar(island, "--notch-left", `${geometry.notchLeft}px`);
     island.classList.toggle("notched", geometry.hasNotch);
+    island.classList.toggle("floating", Boolean(geometry.floating));
+    island.classList.toggle("compact", Boolean(geometry.compact));
   }
 
   view = deriveBuddy(snapshot, { dismissedId });
@@ -397,7 +451,9 @@ function render(snapshot) {
   for (const row of buddyActivity(view)) {
     const item = document.querySelector(`#activity [data-step="${row.key}"]`);
     item.classList.toggle("active", row.active);
-    setText(item.querySelector("span"), row.text);
+    // Live words keep their newest end in view; the isolate keeps them left to right.
+    item.classList.toggle("tail", Boolean(row.tail));
+    setText(item.querySelector("span"), row.tail ? `\u2066${row.text}\u2069` : row.text);
   }
 
   // Listening chips: each starts its own source; the live one stops it.
@@ -410,7 +466,7 @@ function render(snapshot) {
       "disabled",
       Boolean(
         audioBusy ||
-          !interview.whisper.ready ||
+          !speechReady(interview) ||
           (interview.recording && !live),
       ),
     );
@@ -484,7 +540,7 @@ function setLevel(value) {
   bars.forEach((bar, i) => {
     const jitter = value > 0.01 ? 0.75 + Math.random() * 0.5 : 1;
     const height = 3 + Math.min(11, value * 16 * BAR_GAIN[i] * jitter);
-    bar.style.height = `${height.toFixed(1)}px`;
+    bar.style.transform = `scaleY(${(height / 14).toFixed(3)})`;
   });
 }
 api.onLevel((value) => {
@@ -558,6 +614,27 @@ document.addEventListener("pointerdown", (event) => {
   const field = event.target.closest?.(FIELDS);
   if (field) startTyping(field);
 });
+
+// Drag Buddy by its top bar to move it off the notch, or anywhere.
+const HANDLES = ".bar, .topbar";
+let dragging = false;
+document.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  const handle = event.target.closest?.(HANDLES);
+  if (!handle || event.target.closest("button, nav, input, textarea")) return;
+  dragging = true;
+  island.classList.add("dragging");
+  handle.setPointerCapture(event.pointerId);
+  api.drag("start");
+});
+function stopDragging() {
+  if (!dragging) return;
+  dragging = false;
+  island.classList.remove("dragging");
+  api.drag("end");
+}
+document.addEventListener("pointerup", stopDragging);
+document.addEventListener("lostpointercapture", stopDragging);
 document.addEventListener("focusout", () =>
   setTimeout(() => {
     if (!document.activeElement?.matches?.(FIELDS)) stopTyping();
@@ -657,6 +734,15 @@ $("model").addEventListener(
   "click",
   safe(() => api.request("model")),
 );
+let askingAccess = false;
+$("access").addEventListener("click", () => {
+  askingAccess = true;
+  renderSetup();
+  safe(() => api.request("allow-access"))().finally(() => {
+    askingAccess = false;
+    if (current) renderSetup();
+  });
+});
 $("login").addEventListener(
   "click",
   safe(() => api.request("login")),
@@ -807,9 +893,53 @@ async function loadWindows() {
   }
   layout();
 }
+// macOS 15+: the system picker lets the person choose a window, so Screening
+// needs no screen recording access. One frame becomes the attachment.
+async function pickWithSystem() {
+  await api.request("pick-window");
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (error) {
+    if (error.name === "NotAllowedError") return; // The picker was closed.
+    throw new Error(
+      error.name === "AbortError"
+        ? "The window picker closed before a window was chosen. Press Snapshot and pick a window within 10 seconds."
+        : error.message,
+    );
+  }
+  const [track] = stream.getVideoTracks();
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.srcObject = stream;
+    await video.play();
+    // The first frames can be blank until the capture has a picture.
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1000);
+      video.requestVideoFrameCallback(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    const scale = Math.min(1, 1600 / video.videoWidth, 1200 / video.videoHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    await api.request("window-image", {
+      name: track.label,
+      dataUrl: canvas.toDataURL("image/png"),
+    });
+    startTyping(input);
+  } finally {
+    stream.getTracks().forEach((t) => t.stop());
+  }
+}
 $("snapshot").addEventListener(
   "click",
   safe(async () => {
+    if (current?.systemPicker) return pickWithSystem();
     picking = true;
     render(current);
     await loadWindows();
@@ -863,7 +993,18 @@ document.addEventListener("mouseleave", () => look(null));
 setInterval(() => {
   if (current) render(current);
 }, 1000);
-api.subscribe(render);
+// Streaming answers send bursts of updates; draw at most once per frame.
+let pending = null;
+api.subscribe((snapshot) => {
+  const first = pending === null;
+  pending = snapshot;
+  if (first)
+    requestAnimationFrame(() => {
+      const next = pending;
+      pending = null;
+      render(next);
+    });
+});
 api
   .state()
   .then(render)

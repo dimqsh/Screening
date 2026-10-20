@@ -3,6 +3,11 @@ const ESTIMATE = { width: 180, height: 32 };
 const NOTCH_MENU_BAR = 30;
 const WINDOW = { width: 760, height: 660 };
 const PILL_HEIGHT = 30;
+// Detached from the notch, Buddy is a smaller window you can put anywhere.
+const FLOAT = { width: 520, height: 640, margin: 24, pill: 34 };
+// Below this width the open island uses the narrower, stacked layout.
+const COMPACT_BELOW = 1400;
+const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
 const finite = (n) => typeof n === "number" && Number.isFinite(n);
 
 // Reads the JSON printed by scripts/notch-info.swift.
@@ -78,8 +83,45 @@ function islandLayout({ display, notch }) {
       notchWidth: hasNotch ? notch.width : 0,
       notchHeight: hasNotch ? notch.height : PILL_HEIGHT,
       notchLeft: hasNotch ? bounds.x + notch.x - x : width / 2,
+      floating: false,
+      compact: bounds.width < COMPACT_BELOW,
     },
   };
 }
 
-module.exports = { parseNotch, estimateNotch, detectNotch, islandLayout };
+// A floating Buddy keeps its window fully inside the work area.
+function floatingLayout({ display, position }) {
+  const area = display.workArea;
+  const width = Math.min(FLOAT.width, area.width);
+  const height = Math.min(FLOAT.height, area.height);
+  const x = clamp(
+    position?.x ?? area.x + area.width - width - FLOAT.margin,
+    area.x,
+    area.x + area.width - width,
+  );
+  const y = clamp(
+    position?.y ?? area.y + FLOAT.margin,
+    area.y,
+    area.y + area.height - height,
+  );
+  return {
+    window: { x: Math.round(x), y: Math.round(y), width, height },
+    layout: {
+      hasNotch: false,
+      notchWidth: 0,
+      notchHeight: FLOAT.pill,
+      notchLeft: width / 2,
+      floating: true,
+      compact: true,
+    },
+  };
+}
+
+module.exports = {
+  FLOAT,
+  parseNotch,
+  estimateNotch,
+  detectNotch,
+  islandLayout,
+  floatingLayout,
+};

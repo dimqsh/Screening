@@ -5,52 +5,40 @@ window.audioCapture = (() => {
     processor,
     sink,
     source,
-    samples = [],
-    count = 0,
+    resample,
+    sending = Promise.resolve(),
     stopping = false,
     lastLevelAt = 0;
-  const downsample = (input, from) => {
-    const ratio = from / 16000,
-      out = new Float32Array(Math.floor(input.length / ratio));
-    for (let i = 0; i < out.length; i++) {
-      const pos = i * ratio,
-        left = Math.floor(pos),
-        mix = pos - left;
-      out[i] =
-        input[left] * (1 - mix) +
-        (input[Math.min(left + 1, input.length - 1)] || 0) * mix;
-    }
-    return out;
-  };
-  async function flush() {
-    if (!count) return;
-    const input = new Float32Array(count);
-    let offset = 0;
-    for (const chunk of samples) {
-      input.set(chunk, offset);
-      offset += chunk.length;
-    }
-    samples = [];
-    count = 0;
-    const output = downsample(input, context.sampleRate);
-    if (output.length >= 1600) await window.captureLab.audio(output.buffer);
+  // Audio streams to the main process as it arrives (about every 85 ms), so
+  // Apple's live transcription can write words while they are spoken. For
+  // Whisper, the main process cuts the stream into phrases.
+  function send(samples) {
+    const output = resample(samples);
+    if (!output.length) return;
+    sending = sending
+      .then(() => window.captureLab.audio(output.buffer))
+      .catch((e) =>
+        window.dispatchEvent(new CustomEvent("audioerror", { detail: e.message })),
+      );
   }
   async function stop() {
     if (stopping) return;
     stopping = true;
     try {
       stream?.getTracks().forEach((t) => t.stop());
+      if (processor) processor.port.onmessage = null;
       processor?.disconnect();
       source?.disconnect();
       sink?.disconnect();
       if (context) {
-        await flush().catch(() => {});
+        await sending.catch(() => {});
         await context.close();
       }
       await window.captureLab.request("stop");
     } finally {
       context = null;
       stream = null;
+      resample = null;
       stopping = false;
     }
   }
@@ -82,8 +70,7 @@ window.audioCapture = (() => {
       source.connect(processor);
       processor.connect(sink);
       sink.connect(context.destination);
-      samples = [];
-      count = 0;
+      resample = window.Segmenter.createResampler(context.sampleRate);
       await window.captureLab.request("recording", {
         active: true,
         source: kind,
@@ -101,14 +88,7 @@ window.audioCapture = (() => {
           );
           lastLevelAt = performance.now();
         }
-        samples.push(event.data);
-        count += event.data.length;
-        if (count >= context.sampleRate * 8)
-          flush().catch((e) =>
-            window.dispatchEvent(
-              new CustomEvent("audioerror", { detail: e.message }),
-            ),
-          );
+        send(event.data);
       };
       stream.getAudioTracks()[0].addEventListener("ended", () => stop());
       await context.resume();

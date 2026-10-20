@@ -1,6 +1,7 @@
 // The local speech models, in one place. The worker loads one, the startup
 // check finds it on disk, and setup and the menu show its download size.
 const path = require("node:path");
+const os = require("node:os");
 
 // File suffixes Transformers.js uses for each ONNX dtype.
 const SUFFIX = {
@@ -32,9 +33,17 @@ const SPEECH_MODELS = {
   },
 };
 
-// The accurate model needs Apple Silicon to keep up with live speech.
-function defaultModelKey(platform = process.platform, arch = process.arch) {
-  return platform === "darwin" && arch === "arm64" ? "accurate" : "fast";
+// The accurate model needs Apple Silicon to keep up with live speech, and
+// enough memory: it holds about 2.4 GB while listening, so 8 GB Macs swap.
+const ACCURATE_MIN_MEMORY = 15.5 * 1024 ** 3;
+function defaultModelKey(
+  platform = process.platform,
+  arch = process.arch,
+  memory = os.totalmem(),
+) {
+  return platform === "darwin" && arch === "arm64" && memory >= ACCURATE_MIN_MEMORY
+    ? "accurate"
+    : "fast";
 }
 function speechModel(key) {
   return SPEECH_MODELS[key] || SPEECH_MODELS[defaultModelKey()];

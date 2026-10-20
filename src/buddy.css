@@ -101,6 +101,11 @@ kbd {
   width: calc(var(--notch-w) + var(--wing) * 2);
   height: var(--h);
   transform: translateX(-50%);
+  transition: width 240ms var(--ease-close);
+}
+/* Height animates only while Buddy opens or closes. A streaming answer that
+   grows the panel would otherwise animate, and repaint, on every chunk. */
+.island.morph {
   transition:
     width 240ms var(--ease-close),
     height 240ms var(--ease-close);
@@ -111,6 +116,9 @@ kbd {
 .island.open {
   --r: 28px;
   width: max(var(--open-w), calc(var(--notch-w) + 208px));
+  transition: width 440ms var(--ease-open);
+}
+.island.open.morph {
   transition:
     width 440ms var(--ease-open),
     height 440ms var(--ease-open);
@@ -135,7 +143,7 @@ kbd {
     inset 1px 0 0 var(--line),
     inset -1px 0 0 var(--line),
     inset 0 -1px 0 var(--line),
-    0 24px 56px rgba(0, 0, 0, 0.55),
+    0 16px 32px rgba(0, 0, 0, 0.5),
     0 2px 8px rgba(0, 0, 0, 0.35);
 }
 /* Concave shoulders blend the island into the top edge of the screen. */
@@ -168,14 +176,15 @@ kbd {
   inset: 0;
   border-radius: 0 0 var(--r) var(--r);
   box-shadow:
-    -16px 8px 34px rgba(124, 92, 255, 0.6),
-    16px 8px 34px rgba(54, 209, 255, 0.5);
+    -14px 8px 24px rgba(124, 92, 255, 0.6),
+    14px 8px 24px rgba(54, 209, 255, 0.5);
   opacity: 0;
   transition: opacity 140ms linear;
   pointer-events: none;
 }
 .island.recording .glow {
   opacity: calc(var(--level) * 0.85);
+  transition: none;
   will-change: opacity;
 }
 .island.bloom .glow {
@@ -251,10 +260,10 @@ kbd {
 .wave i {
   display: block;
   width: 3px;
-  height: 3px;
+  height: 14px;
   border-radius: 2px;
   background: linear-gradient(var(--cyan), var(--violet));
-  transition: height 90ms linear;
+  transform: scaleY(0.22);
 }
 .island:not(.recording) .wave,
 .island:not(.recording) .timer {
@@ -324,9 +333,7 @@ kbd {
   );
   opacity: 0.75;
   transform: scale(calc(1 + var(--level) * 0.35));
-  transition:
-    transform 90ms linear,
-    opacity 200ms;
+  transition: opacity 200ms;
 }
 .face .head {
   position: absolute;
@@ -397,18 +404,12 @@ kbd {
   --look-x: 0.05em;
   --look-y: -0.07em;
 }
-.face[data-mood="reading"] .eyes {
-  --look-y: 0.05em;
-  animation: scan 1.6s ease-in-out infinite;
+.face[data-mood="reading"] {
+  --look-y: 0.06em;
 }
 .face[data-mood="listening"] .halo,
 .face[data-mood="reading"] .halo {
   opacity: 1;
-}
-@keyframes scan {
-  50% {
-    transform: translate(0.07em, 0.05em);
-  }
 }
 /* The "•••" badge, as in a chat bubble, while Buddy thinks. */
 .face .dots {
@@ -438,7 +439,7 @@ kbd {
   display: flex;
 }
 .face[data-mood="thinking"] .dots i {
-  animation: hop 1s ease-in-out infinite;
+  animation: hop 1.2s steps(1, end) infinite;
 }
 .face[data-mood="thinking"] .dots i:nth-child(2) {
   animation-delay: 120ms;
@@ -447,10 +448,10 @@ kbd {
   animation-delay: 240ms;
 }
 @keyframes hop {
-  30% {
+  0% {
     transform: translateY(-0.03em);
   }
-  60% {
+  33% {
     transform: translateY(0);
   }
 }
@@ -622,6 +623,11 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Live words cut at the start, so the newest stay in view. */
+.activity li.tail span {
+  direction: rtl;
+  text-align: left;
+}
 .activity svg {
   width: 13px;
   height: 13px;
@@ -714,13 +720,10 @@ kbd {
 .chip.live {
   --chip: #ff5a76;
 }
-.island.open .chip.live .chip-icon {
-  animation: pulse 1.4s ease-in-out infinite;
-}
-@keyframes pulse {
-  50% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--chip) 18%, transparent);
-  }
+.chip.live .chip-icon {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--chip) 22%, transparent),
+    0 0 12px color-mix(in srgb, var(--chip) 45%, transparent);
 }
 .link {
   border: 0;
@@ -1002,8 +1005,7 @@ kbd {
     rgba(54, 209, 255, 0.36) 60%,
     rgba(255, 255, 255, 0.06) 100%
   );
-  background-size: 300% 100%;
-  animation: shimmer 1.6s linear infinite;
+  animation: shimmer 1.5s steps(1, end) infinite;
 }
 .shimmer i:nth-child(2) {
   width: 86%;
@@ -1014,11 +1016,14 @@ kbd {
   animation-delay: 240ms;
 }
 @keyframes shimmer {
-  from {
-    background-position: 100% 0;
+  0% {
+    opacity: 1;
   }
-  to {
-    background-position: -200% 0;
+  33% {
+    opacity: 0.6;
+  }
+  66% {
+    opacity: 0.35;
   }
 }
 .answer-foot {
@@ -1105,6 +1110,18 @@ kbd {
 }
 .transcript .empty-text {
   margin: 8px 0;
+}
+/* Words Apple has not settled yet end in the streaming caret. */
+.line.live p::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  border-radius: 2px;
+  background: linear-gradient(var(--cyan), var(--violet));
+  animation: blink 1s steps(2, start) infinite;
 }
 
 /* Notes and You */
@@ -1320,6 +1337,61 @@ input[role="switch"]:checked::after {
 .island.glance .reading {
   max-height: 300px;
 }
+/* Drag handles: the top bar, and the panel's header around its buttons. */
+.bar,
+.topbar {
+  cursor: grab;
+}
+.bar button,
+.topbar button,
+.topbar nav {
+  cursor: pointer;
+}
+.island.dragging,
+.island.dragging * {
+  cursor: grabbing !important;
+}
+
+/* Floating: a free-standing pill with all corners rounded. */
+.island.floating .ear {
+  display: none;
+}
+.island.floating {
+  --r: 17px;
+}
+.island.floating.open {
+  --r: 24px;
+}
+.island.floating .body,
+.island.floating .glow {
+  border-radius: var(--r);
+}
+
+/* Compact: a narrower island with its cards stacked, for floating Buddy and
+   small screens. */
+.island.compact {
+  --open-w: 460px;
+}
+.island.compact .hero {
+  grid-template-columns: 1fr;
+}
+.island.compact .reading {
+  font-size: 16px;
+  max-height: 150px;
+}
+.island.compact.glance .reading {
+  max-height: 280px;
+}
+.island.compact .transcript {
+  max-height: 150px;
+}
+.island.compact .field {
+  height: 130px;
+}
+.island.compact .setup-title {
+  font-size: 18px;
+}
+
 /* Capture experiment: an opaque marker card replaces the island. */
 .capture-probe {
   position: fixed;

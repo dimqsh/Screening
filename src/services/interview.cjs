@@ -1,8 +1,12 @@
 const fs = require("node:fs/promises");
+const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { safeStorage, dialog } = require("electron");
 const { Assistant } = require("./assistant.cjs");
 const { Transcription } = require("./transcription.cjs");
+const { LiveSpeech } = require("./live-speech.cjs");
+const { hasAudioTap, hasLiveSpeech } = require("./macos.cjs");
+const { speechReady } = require("../buddy-model.js");
 const {
   modelFiles,
   speechModel,
@@ -31,6 +35,7 @@ async function createInterview(
     getNotes = () => "",
     onLevel = () => {},
     onDraft = () => {},
+    createSpeechWorker,
   } = {},
 ) {
   // English by default for new installs; saved choices from older versions win.
@@ -39,12 +44,18 @@ async function createInterview(
     answerLanguage: "en",
     autoAnswer: false,
     style: "concise",
+    answerSpeed: "fast",
     context: "",
     interviewType: "general",
     notesEnabled: true,
     includeNotes: false,
     source: "system",
+    // Apple's live transcription where macOS has it for the language.
+    speechEngine: "apple",
     speechModel: defaultModelKey(),
+    dock: "notch",
+    position: null,
+    accessPrompted: false,
   };
   const location = path.join(app.getPath("userData"), "settings.json");
   try {
@@ -54,11 +65,16 @@ async function createInterview(
       "answerLanguage",
       "autoAnswer",
       "style",
+      "answerSpeed",
       "interviewType",
       "notesEnabled",
       "includeNotes",
       "source",
+      "speechEngine",
       "speechModel",
+      "dock",
+      "position",
+      "accessPrompted",
     ])
       if (validSetting(k, saved[k])) settings[k] = saved[k];
     if (saved.contextEncrypted && safeStorage.isEncryptionAvailable())
@@ -100,8 +116,22 @@ async function createInterview(
       activeTurn.error = value.error;
     }
     update();
+  }, {
+    // Screening's own Codex home, outside the per-run test data, so answers
+    // never load the person's Codex config, plugins, MCP servers or hooks.
+    home:
+      process.env.SCREENING_CODEX_HOME ||
+      path.join(app.getPath("appData"), "Capture Lab", "codex"),
   });
   state.ai = ai.state;
+  const helper = (name) =>
+    app.isPackaged
+      ? path.join(process.resourcesPath, "bin", name)
+      : path.join(__dirname, "..", "..", "bin", name);
+  const live =
+    hasLiveSpeech() && existsSync(helper("live-speech"))
+      ? new LiveSpeech(helper("live-speech"))
+      : null;
   const whisper = new Transcription(
     process.env.CAPTURE_LAB_MODEL_CACHE ||
       path.join(app.getPath("userData"), "models"),
@@ -118,19 +148,27 @@ async function createInterview(
       if (state.transcript.length > 120) state.transcript.shift();
       update();
       clearTimeout(autoTimer);
+      // Phrases now arrive as people pause, so a pause alone is not the end of
+      // a question. A question mark answers almost at once; otherwise Buddy
+      // waits a little longer for more speech.
       if (settings.autoAnswer)
-        autoTimer = setTimeout(() => {
-          if (!ai.state.busy && ai.state.connected && !state.attachment)
-            answer("").catch((e) => {
-              state.error = e.message;
-              update();
-            });
-        }, 1400);
+        autoTimer = setTimeout(
+          () => {
+            if (!ai.state.busy && ai.state.connected && !state.attachment)
+              answer("").catch((e) => {
+                state.error = e.message;
+                update();
+              });
+          },
+          /[?？]\s*$/.test(text) ? 600 : 2500,
+        );
     },
     onLevel,
     speechModel(settings.speechModel),
+    { createWorker: createSpeechWorker, live },
   );
   state.whisper = whisper.state;
+  const listenOptions = () => ({ live: settings.speechEngine === "apple" });
   // A model already on disk counts as ready; it loads into memory on first use.
   async function markIfDownloaded() {
     try {
@@ -141,8 +179,21 @@ async function createInterview(
       /* Setup offers the download. */
     }
   }
-  await ai.status();
   await markIfDownloaded();
+  // What Apple offers for the speech language decides whether setup still
+  // needs Whisper, so Buddy's first look waits for it, up to 5 seconds.
+  // Without Whisper on disk, Apple is the way to listen: its language
+  // downloads now, as it does when the language is chosen.
+  const liveChecked = whisper
+    .checkLive(settings.speechLanguage, {
+      install: settings.speechEngine === "apple" && !whisper.state.ready,
+    })
+    .catch(() => {});
+  await ai.status();
+  await Promise.race([
+    liveChecked,
+    new Promise((resolve) => setTimeout(resolve, 5000).unref()),
+  ]);
   let saveQueue = Promise.resolve();
   async function save() {
     const { context, ...saved } = settings;
@@ -163,8 +214,18 @@ async function createInterview(
     if (["speechLanguage", "answerLanguage"].includes(key))
       return LANGUAGE_CODES.includes(value);
     if (key === "source") return ["system", "microphone"].includes(value);
+    if (key === "speechEngine") return ["apple", "whisper"].includes(value);
     if (key === "speechModel") return Object.hasOwn(SPEECH_MODELS, value);
-    if (["autoAnswer", "notesEnabled", "includeNotes"].includes(key))
+    if (key === "dock") return ["notch", "float"].includes(value);
+    if (key === "position")
+      return (
+        value !== null &&
+        typeof value === "object" &&
+        [value.x, value.y].every(
+          (n) => Number.isFinite(n) && Math.abs(n) < 100000,
+        )
+      );
+    if (["autoAnswer", "notesEnabled", "includeNotes", "accessPrompted"].includes(key))
       return typeof value === "boolean";
     if (key === "interviewType")
       return [
@@ -176,9 +237,21 @@ async function createInterview(
         "hr",
       ].includes(value);
     if (key === "style") return ["concise", "detailed"].includes(value);
+    if (key === "answerSpeed") return ["fast", "best"].includes(value);
     if (key === "context")
       return typeof value === "string" && value.length <= 16000;
     return false;
+  }
+  // The question is what was said in the last 45 seconds, at most 10 phrases.
+  function recentSpeech() {
+    const last = state.transcript.at(-1);
+    if (!last) return "";
+    const since = Date.parse(last.time) - 45000;
+    return state.transcript
+      .slice(-10)
+      .filter((t) => Date.parse(t.time) >= since)
+      .map((t) => t.text)
+      .join("\n");
   }
   async function answer(question) {
     state.error = null;
@@ -188,14 +261,12 @@ async function createInterview(
     if (ai.state.busy) throw new Error("Stop the current answer first.");
     if (!ai.state.connected) throw new Error("Sign in with ChatGPT first.");
     const attachment = state.attachment;
+    if (!question.trim() && !attachment) await whisper.settle();
     const input =
       question.trim() ||
       (attachment
         ? "Help me answer the task in this screenshot."
-        : state.transcript
-            .slice(-4)
-            .map((t) => t.text)
-            .join("\n"));
+        : recentSpeech());
     if (!input)
       throw new Error(
         "Type a question, record speech, or attach a window screenshot first.",
@@ -235,6 +306,7 @@ async function createInterview(
         context: settings.context,
         language: settings.answerLanguage,
         style: settings.style,
+        speed: settings.answerSpeed,
         history,
         interviewType: settings.interviewType,
         notes: settings.notesEnabled && settings.includeNotes ? getNotes() : "",
@@ -264,8 +336,11 @@ async function createInterview(
     if (op === "setting") {
       if (!payload || !validSetting(payload.key, payload.value))
         throw new Error("Invalid setting");
-      if (payload.key === "speechModel" && state.recording)
-        throw new Error("Stop listening to change the speech model.");
+      if (
+        ["speechModel", "speechEngine", "speechLanguage"].includes(payload.key) &&
+        state.recording
+      )
+        throw new Error("Stop listening to change how speech is transcribed.");
       settings[payload.key] = payload.value;
       await save();
       if (
@@ -273,6 +348,11 @@ async function createInterview(
         whisper.setModel(speechModel(payload.value))
       )
         await markIfDownloaded();
+      // Choosing a language Apple supports downloads it for next time.
+      if (["speechLanguage", "speechEngine"].includes(payload.key))
+        await whisper.checkLive(settings.speechLanguage, {
+          install: settings.speechEngine === "apple",
+        });
       update();
       return;
     }
@@ -282,6 +362,13 @@ async function createInterview(
         throw new Error("Stop the answer before attaching a screenshot.");
       const attachment = await windowCapture.capture(payload);
       state.attachment = attachment;
+      update();
+      return;
+    }
+    if (op === "window-image") {
+      if (ai.state.busy)
+        throw new Error("Stop the answer before attaching a screenshot.");
+      state.attachment = windowCapture.fromImage(payload);
       update();
       return;
     }
@@ -320,9 +407,12 @@ async function createInterview(
         (active && !["microphone", "system"].includes(source))
       )
         throw new Error("Invalid recording state");
-      if (active && !whisper.state.ready)
-        throw new Error("Load Whisper first.");
-      whisper.keepWarm(active);
+      if (active && !speechReady(state))
+        throw new Error("Download the speech model before listening.");
+      if (active) await whisper.begin(settings.speechLanguage, listenOptions());
+      else await whisper.end();
+      // Whisper loads only when this session needs it.
+      whisper.keepWarm(active && whisper.state.engine === "whisper");
       state.recording = active;
       state.source = active ? source : null;
       state.startedAt = active ? Date.now() : state.startedAt;
@@ -333,18 +423,14 @@ async function createInterview(
       if (state.recording) throw new Error("Stop the current recording first.");
       state.source = "system";
       state.startedAt = Date.now();
-      whisper.keepWarm(true);
-      try {
-        await whisper.startNative(
-          app.isPackaged
-            ? path.join(process.resourcesPath, "bin", "audio-sck")
-            : path.join(__dirname, "..", "..", "bin", "audio-sck"),
-          settings.speechLanguage,
-        );
-      } catch (error) {
-        whisper.keepWarm(false);
-        throw error;
-      }
+      // A Core Audio tap needs only System Audio Recording; ScreenCaptureKit,
+      // used before macOS 14.2, needs screen recording.
+      await whisper.startNative(
+        helper(hasAudioTap() ? "audio-tap" : "audio-sck"),
+        settings.speechLanguage,
+        listenOptions(),
+      );
+      whisper.keepWarm(whisper.state.engine === "whisper");
       return;
     }
     if (op === "stop") {
@@ -388,10 +474,7 @@ async function createInterview(
       if (!state.recording) throw new Error("Recording is stopped.");
       if (!(buffer instanceof ArrayBuffer))
         throw new Error("Invalid audio buffer");
-      return whisper.transcribe(
-        new Float32Array(buffer),
-        settings.speechLanguage,
-      );
+      whisper.push(new Float32Array(buffer));
     },
     close() {
       closed = true;

@@ -48,6 +48,41 @@ let stick = true;
 let answerKey = "";
 let answerTurnId = null;
 let transcriptKey = "";
+// A replacement window (see replaceBuddy in main.cjs) starts where this one
+// was, so an answer you closed stays closed.
+let memoryKey = "";
+let memoryTimer = null;
+input.addEventListener("input", () => {
+  clearTimeout(memoryTimer);
+  memoryTimer = setTimeout(remember, 400);
+});
+function remember() {
+  const memory = {
+    dismissedId,
+    seenTurn,
+    mutedTurn,
+    pinned,
+    tab,
+    draft: input.value.slice(0, 16000),
+    autoUntil: autoUntil === Infinity ? -1 : autoUntil,
+  };
+  const key = JSON.stringify(memory);
+  if (key === memoryKey) return;
+  memoryKey = key;
+  api.remember(memory);
+}
+try {
+  const saved = new URLSearchParams(location.hash.slice(1)).get("memory");
+  if (saved) {
+    const memory = JSON.parse(saved);
+    ({ dismissedId, seenTurn, mutedTurn, pinned } = memory);
+    if (["answer", "transcript", "notes", "you"].includes(memory.tab)) tab = memory.tab;
+    if (typeof memory.draft === "string") input.value = memory.draft.slice(0, 16000);
+    autoUntil = memory.autoUntil < 0 ? Infinity : Number(memory.autoUntil) || 0;
+  }
+} catch {
+  /* A fresh start. */
+}
 let lastIssue = null;
 let contextDirty = false;
 let notesTimer = null;
@@ -530,6 +565,7 @@ function render(snapshot) {
   if (flashing) setText($("toast"), flash.text);
 
   layout();
+  remember();
 }
 
 let levelNow = -1;

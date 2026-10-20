@@ -38,6 +38,7 @@ module.exports = async function verify(ctx) {
     runCapture,
     permission,
     setDock,
+    replaceBuddy,
     access,
     delay,
   } = ctx;
@@ -410,6 +411,46 @@ module.exports = async function verify(ctx) {
   check("Buddy closes when the answer is gone", () =>
     assert.equal(after.open, after.manual),
   );
+
+  // macOS 27 moves Buddy to a new window to turn protection off. The new
+  // window must not reopen an answer that was closed, in front of the call.
+  const savedMessages = interview.state.messages;
+  interview.state.messages = [
+    { id: 9301, role: "user", text: QUESTION },
+    { id: 9302, role: "assistant", status: "done", text: STAR_ANSWER },
+  ];
+  publish();
+  let opened = await probe();
+  for (let i = 0; i < 50 && opened.mode !== "answer"; i++) {
+    await delay(100);
+    opened = await probe();
+  }
+  await click("dismiss");
+  await delay(400);
+  const closedBefore = await probe();
+  const oldWindow = buddy;
+  replaceBuddy();
+  buddy = ctx.buddy;
+  watch("Buddy", buddy);
+  await until(
+    () => BrowserWindow.getAllWindows().length === 2 && !buddy.webContents.isLoading(),
+    10000,
+    "The old Buddy window did not close",
+  );
+  await delay(500);
+  const reopened = await probe();
+  interview.state.messages = savedMessages;
+  publish();
+  await delay(300);
+  check("A new Buddy window keeps a closed answer closed", () => {
+    assert.equal(opened.mode, "answer");
+    assert.notEqual(closedBefore.mode, "answer");
+    assert.notEqual(buddy, oldWindow);
+    assert.equal(oldWindow.isDestroyed(), true);
+    assert.equal(closedBefore.open, closedBefore.manual);
+    assert.equal(reopened.open, reopened.manual);
+    assert.notEqual(reopened.mode, "answer");
+  });
 
   // Floating: Buddy leaves the notch for a small window, then snaps back.
   await setDock("float");

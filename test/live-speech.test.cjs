@@ -373,3 +373,65 @@ test("Buddy shows Apple's words while they are spoken, and only while listening"
   const newest = buddyActivity(long).find((row) => row.key === "hear").text;
   assert.match(newest, /^“….*public API”$/);
 });
+
+test("stopping while Apple is still starting ends cleanly and lets listening start again", async () => {
+  const live = fakeLive();
+  let release;
+  live.start = (language, handlers) =>
+    new Promise((resolve) => {
+      live.handlers = handlers;
+      release = () => resolve({ type: "ready" });
+    });
+  let stops = 0;
+  live.stop = async () => stops++;
+  const { stt } = transcription(live);
+  const starting = stt.begin("en");
+  await wait();
+  await stt.end();
+  release();
+  assert.equal(await starting, false);
+  assert.equal(stops, 1, "the helper that started late is stopped");
+  assert.equal(stt.session, null);
+  live.start = async (language, handlers) => ((live.handlers = handlers), { type: "ready" });
+  assert.equal(await stt.begin("en"), true);
+  assert.equal(stt.state.engine, "apple");
+  stt.close();
+});
+
+test("a failed Apple check is asked again; only an unsupported language is remembered", async () => {
+  let fail = true;
+  const helper = fakeHelper({
+    onStart: (child) => {
+      if (fail) return child.exit(1);
+      child.say({ locale: "en-US", model: "speech", installed: true });
+      child.exit(0);
+    },
+  });
+  const live = new LiveSpeech("/bin/live-speech", { run: helper.run });
+  assert.equal(await live.check("en"), null);
+  fail = false;
+  assert.equal((await live.check("en")).locale, "en-US");
+  assert.equal(helper.runs.length, 2);
+});
+
+test("words begun before New Session do not reach the new transcript", async () => {
+  const live = fakeLive();
+  const { stt, texts } = transcription(live);
+  await stt.begin("en");
+  live.handlers.onPartial("Tell me about your old");
+  stt.clear();
+  live.handlers.onFinal("Tell me about your old job.");
+  live.handlers.onPartial("Why this role");
+  live.handlers.onFinal("Why this role?");
+  assert.deepEqual(texts, ["Why this role?"]);
+  stt.close();
+});
+
+test("quitting stops an Apple language download too", async () => {
+  const helper = fakeHelper({ onStart: () => {} });
+  const live = new LiveSpeech("/bin/live-speech", { run: helper.run });
+  const download = live.install("ru").catch(() => "stopped");
+  await wait();
+  live.close();
+  assert.equal(await download, "stopped");
+});

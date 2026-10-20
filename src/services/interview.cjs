@@ -136,7 +136,10 @@ async function createInterview(
     process.env.CAPTURE_LAB_MODEL_CACHE ||
       path.join(app.getPath("userData"), "models"),
     (s) => {
-      if (s.source === "system") state.recording = s.recording;
+      // Call audio reports its own start and stop. The interview's source,
+      // not the helper's last one, decides, so a failed call-audio start
+      // cannot switch off a microphone session later.
+      if (state.source === "system") state.recording = s.recording;
       update();
     },
     (text) => {
@@ -148,6 +151,8 @@ async function createInterview(
       if (state.transcript.length > 120) state.transcript.shift();
       update();
       clearTimeout(autoTimer);
+      // A line that arrives while an answer is being made is part of it.
+      if (answering || ai.state.busy) return;
       // Phrases now arrive as people pause, so a pause alone is not the end of
       // a question. A question mark answers almost at once; otherwise Buddy
       // waits a little longer for more speech.
@@ -253,12 +258,23 @@ async function createInterview(
       .map((t) => t.text)
       .join("\n");
   }
+  // True from the press until the answer ends, including the moment Apple
+  // settles the last words, so two presses never make two answers.
+  let answering = false;
   async function answer(question) {
+    if (answering || ai.state.busy) throw new Error("Stop the current answer first.");
+    answering = true;
+    try {
+      return await answerNow(question);
+    } finally {
+      answering = false;
+    }
+  }
+  async function answerNow(question) {
     state.error = null;
     clearTimeout(autoTimer);
     if (typeof question !== "string" || question.length > 16000)
       throw new Error("Invalid question");
-    if (ai.state.busy) throw new Error("Stop the current answer first.");
     if (!ai.state.connected) throw new Error("Sign in with ChatGPT first.");
     const attachment = state.attachment;
     if (!question.trim() && !attachment) await whisper.settle();
@@ -409,8 +425,10 @@ async function createInterview(
         throw new Error("Invalid recording state");
       if (active && !speechReady(state))
         throw new Error("Download the speech model before listening.");
-      if (active) await whisper.begin(settings.speechLanguage, listenOptions());
-      else await whisper.end();
+      if (active) {
+        // Stopped while starting: the stop already set the state.
+        if (!(await whisper.begin(settings.speechLanguage, listenOptions()))) return;
+      } else await whisper.end();
       // Whisper loads only when this session needs it.
       whisper.keepWarm(active && whisper.state.engine === "whisper");
       state.recording = active;
@@ -425,11 +443,16 @@ async function createInterview(
       state.startedAt = Date.now();
       // A Core Audio tap needs only System Audio Recording; ScreenCaptureKit,
       // used before macOS 14.2, needs screen recording.
-      await whisper.startNative(
-        helper(hasAudioTap() ? "audio-tap" : "audio-sck"),
-        settings.speechLanguage,
-        listenOptions(),
-      );
+      try {
+        await whisper.startNative(
+          helper(hasAudioTap() ? "audio-tap" : "audio-sck"),
+          settings.speechLanguage,
+          listenOptions(),
+        );
+      } catch (error) {
+        if (!state.recording) state.source = null;
+        throw error;
+      }
       whisper.keepWarm(whisper.state.engine === "whisper");
       return;
     }

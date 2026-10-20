@@ -28,6 +28,7 @@ class LiveSpeech {
     this.readyMs = readyMs;
     this.child = null;
     this.checks = new Map();
+    this.commands = new Set();
   }
   // What Apple offers for a language: { locale, model, installed }, or null
   // when it does not support the language (Kazakh, automatic detection).
@@ -37,7 +38,12 @@ class LiveSpeech {
         language,
         this.command(["--check", language], () => {}, 15000).then(
           (lines) => (lines[0]?.locale ? lines[0] : null),
-          () => null,
+          // A slow or failed check is asked again next time; only "not
+          // supported" is remembered.
+          () => {
+            this.checks.delete(language);
+            return null;
+          },
         ),
       );
     return this.checks.get(language);
@@ -55,6 +61,7 @@ class LiveSpeech {
   command(args, onLine = () => {}, timeoutMs = 0) {
     return new Promise((resolve, reject) => {
       const child = this.run(this.helper, args, { stdio: ["ignore", "pipe", "pipe"] });
+      this.commands.add(child);
       const lines = [];
       let diagnostic = "";
       const timer = timeoutMs && setTimeout(() => child.kill("SIGKILL"), timeoutMs);
@@ -66,6 +73,7 @@ class LiveSpeech {
       child.once("error", reject);
       child.once("close", (code) => {
         clearTimeout(timer);
+        this.commands.delete(child);
         if (code === 0) resolve(lines);
         else reject(new Error(diagnostic.trim() || `Apple speech stopped (code ${code}).`));
       });
@@ -135,8 +143,10 @@ class LiveSpeech {
       child.stdin.end();
     });
   }
+  // Quitting also stops a language download or check that is still running.
   close() {
     this.child?.kill("SIGKILL");
+    for (const child of this.commands) child.kill("SIGKILL");
   }
 }
 module.exports = { LiveSpeech, readLines };

@@ -357,17 +357,34 @@ function apply() {
 // Buddy moves to one. The old window stays up until the new one has drawn.
 // The engine is never shown, so it keeps its window.
 let retiring = [];
+// Buddy's page reports what it knows (see buddy.js), so a new window can start there.
+let buddyMemory = null;
 function replaceBuddy() {
+  if (retiring.length) return;
   endDrag(false);
-  retiring.push(buddy);
-  const next = (buddy = createBuddy(buddy.getBounds()));
-  next.once("ready-to-show", () => {
-    // A newer window may have replaced this one before it drew.
-    if (next !== buddy) return;
-    const old = retiring.splice(0);
+  const old = buddy;
+  retiring.push(old);
+  const next = (buddy = createBuddy(old.getBounds(), buddyMemory));
+  let settled = false;
+  const settle = (ok) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    retiring = [];
+    if (ok || !alive(old)) {
+      if (alive(old)) old.destroy();
+    } else {
+      // The new page never drew: keep the old window, still protected.
+      buddy = old;
+      if (alive(next)) next.destroy();
+    }
+    syncBuddy();
     publish();
-    for (const win of old) if (alive(win)) win.destroy();
-  });
+  };
+  const timer = setTimeout(() => settle(false), 8000);
+  next.once("ready-to-show", () => settle(true));
+  next.webContents.once("did-fail-load", () => settle(false));
+  next.webContents.once("render-process-gone", () => settle(false));
 }
 
 async function audio(op, kind) {
@@ -404,7 +421,7 @@ const toggleListening = () =>
     ? audio("stop")
     : audio("start", interview.state.settings.source);
 
-function create(file, options) {
+function create(file, options, load) {
   const win = new BrowserWindow({
     show: false,
     icon: path.join(__dirname, "..", "assets", "brand", "screening.png"),
@@ -421,10 +438,14 @@ function create(file, options) {
   win.setContentProtection(state.protection);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
-  win.loadFile(path.join(__dirname, file));
+  win.loadFile(path.join(__dirname, file), load);
   return win;
 }
-function createBuddy(bounds) {
+// `memory` is what the previous Buddy page knew (dismissed answer, pin, tab,
+// draft), so a replacement window does not reopen an answer you closed.
+function createBuddy(bounds, memory) {
+  const hash = memory ? `memory=${encodeURIComponent(JSON.stringify(memory))}` : undefined;
+  buddyMemory = null;
   const win = create("buddy.html", {
     title: "Screening — Buddy",
     ...bounds,
@@ -447,7 +468,7 @@ function createBuddy(bounds) {
     skipTaskbar: true,
     hiddenInMissionControl: true,
     type: process.platform === "darwin" ? "panel" : undefined,
-  });
+  }, hash ? { hash } : undefined);
   win.setAlwaysOnTop(true, "screen-saver");
   win.setIgnoreMouseEvents(true, { forward: true });
   if (process.platform === "darwin")
@@ -893,6 +914,11 @@ app
       throw new Error("Unsupported action.");
     });
     // Outside the island, clicks pass through to the apps below.
+    ipcMain.on("buddy:memory", (event, memory) => {
+      if (event.senderFrame !== buddy?.webContents.mainFrame) return;
+      if (memory && typeof memory === "object" && JSON.stringify(memory).length < 20000)
+        buddyMemory = memory;
+    });
     ipcMain.on("buddy:mouse", (event, inside) => {
       if (event.senderFrame !== buddy.webContents.mainFrame || state.testing)
         return;
@@ -990,6 +1016,7 @@ app
         permission,
         setDock,
         access,
+        replaceBuddy,
         delay,
       });
       if (!process.argv.includes("--keep-open")) app.quit();

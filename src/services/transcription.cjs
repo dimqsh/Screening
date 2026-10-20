@@ -273,20 +273,31 @@ class Transcription {
   // A listening session. Apple's live transcription writes words as they are
   // spoken; without it (older macOS, Kazakh, automatic language, or the
   // Whisper choice), speech is cut into phrases at pauses for Whisper.
+  // Resolves false when listening was stopped before it started.
   async begin(language, { live = true } = {}) {
     await this.ending;
     if (this.session) throw new Error("Recording already started.");
     const session = { language, engine: "whisper", segmenter: null, done: false };
     this.session = session;
+    const stopped = () => session !== this.session;
     if (live && this.live) {
       try {
-        if ((await this.checkLive(language, { install: true }))?.installed) {
+        const info = await this.checkLive(language, { install: true });
+        if (stopped()) return false;
+        if (info?.installed) {
           await this.live.start(language, {
-            onPartial: (text) => !session.done && this.update({ partial: text }),
+            onPartial: (text) => {
+              if (session.done) return;
+              // Words started before New Session belong to the old session.
+              session.since ??= this.generation;
+              this.update({ partial: text });
+            },
             onFinal: (text) => {
               if (session.done) return;
+              const stale = session.since !== undefined && session.since !== this.generation;
+              session.since = undefined;
               this.update({ partial: "" });
-              if (text) this.onText?.(text);
+              if (text && !stale) this.onText?.(text);
               session.settled?.();
             },
             // The helper stopped on its own: Whisper takes over when it is
@@ -307,9 +318,14 @@ class Transcription {
               if (error) this.update({ error: reason });
             },
           });
+          if (stopped()) {
+            await this.live.stop().catch(() => {});
+            return false;
+          }
           session.engine = "apple";
         }
       } catch (error) {
+        if (stopped()) return false;
         this.update({ error: `Apple speech is unavailable, using Whisper: ${error.message}` });
       }
     }
@@ -319,6 +335,7 @@ class Transcription {
     }
     if (session.engine === "whisper") this.useWhisper(session);
     else this.update({ engine: "apple", partial: "" });
+    return true;
   }
   useWhisper(session) {
     session.engine = "whisper";
@@ -356,11 +373,14 @@ class Transcription {
     if (!session) return this.ending;
     this.session = null;
     this.ending = (async () => {
-      if (session.engine === "apple") await this.live.stop();
-      else session.segmenter?.flush();
-      session.done = true;
-      this.update({ engine: null, partial: "" });
-    })();
+      try {
+        if (session.engine === "apple") await this.live.stop();
+        else session.segmenter?.flush();
+      } finally {
+        session.done = true;
+        this.update({ engine: null, partial: "" });
+      }
+    })().catch(() => {});
     return this.ending;
   }
   async startNative(helper, language, options) {
@@ -368,11 +388,16 @@ class Transcription {
       throw new Error("Native audio requires macOS");
     if (this.native) throw new Error("Recording already started.");
     this.update({ recording: false, source: "system", error: null });
+    let started;
     try {
-      await this.begin(language, options);
+      started = await this.begin(language, options);
     } catch (error) {
       this.update({ source: null });
       throw error;
+    }
+    if (!started) {
+      this.update({ source: null });
+      return;
     }
     let leftover = Buffer.alloc(0),
       diagnostic = "",
@@ -425,7 +450,7 @@ class Transcription {
         clearTimeout(timer);
         this.native = null;
         this.end();
-        this.update({ recording: false, error: error.message });
+        this.update({ recording: false, source: null, error: error.message });
         reject(error);
       });
       child.once("close", (code) => {
@@ -437,6 +462,7 @@ class Transcription {
           "Call audio stopped. Check Screening under System Audio Recording Only in Privacy & Security.";
         this.update({
           recording: false,
+          source: null,
           ...((code && code !== 0) || !ready ? { error: message } : {}),
         });
         this.onLevel(0);

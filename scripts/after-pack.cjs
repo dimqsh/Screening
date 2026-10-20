@@ -32,8 +32,14 @@ function signWith(bundle, { data, password }) {
   const keychain = path.join(dir, "signing.keychain-db");
   const p12 = path.join(dir, "signing.p12");
   const secret = crypto.randomBytes(18).toString("hex");
-  const security = (...args) =>
-    execFileSync("/usr/bin/security", args, { stdio: "pipe" }).toString();
+  // Errors name only the step: the command line holds the passwords.
+  const security = (...args) => {
+    try {
+      return execFileSync("/usr/bin/security", args, { stdio: "pipe" }).toString();
+    } catch (error) {
+      throw new Error(`security ${args[0]} failed: ${String(error.stderr || "").trim()}`);
+    }
+  };
   const searchList = security("list-keychains", "-d", "user")
     .split("\n")
     .map((line) => line.trim().replace(/^"|"$/g, ""))

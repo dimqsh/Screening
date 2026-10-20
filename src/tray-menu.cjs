@@ -191,8 +191,8 @@ function trayMenu(snapshot, platform = process.platform) {
     { type: "separator" },
     ...(snapshot.permissions &&
     (snapshot.permissions.microphone !== "granted" ||
-      snapshot.permissions.screen !== "granted")
-      ? [{ id: "allow-access", label: "Allow Microphone and Screen…" }]
+      snapshot.permissions.audio !== "granted")
+      ? [{ id: "allow-access", label: "Allow Microphone and Call Audio…" }]
       : []),
     modelItem(interview.whisper),
     ...accountItems(interview.ai),

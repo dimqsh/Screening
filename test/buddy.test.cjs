@@ -666,32 +666,43 @@ test("menu offers floating Buddy and snapping it back", () => {
   assert.equal(findItem(floating, "toggle-dock").label, "Snap Buddy to the Notch");
 });
 
-test("first run asks once for microphone and screen access", () => {
-  const missing = snapshot({ permissions: { microphone: "not-determined", screen: "denied" } });
+test("first run asks once for microphone and call audio access", () => {
+  const missing = snapshot({ permissions: { microphone: "not-determined", audio: "denied" } });
   const view = deriveBuddy(missing);
   assert.equal(view.mode, "setup");
   assert.equal(view.needsAccess, true);
   assert.equal(view.needsWhisper, false);
   const asked = snapshot({
-    permissions: { microphone: "denied", screen: "denied" },
+    permissions: { microphone: "denied", audio: "denied" },
     interview: { settings: { accessPrompted: true } },
   });
   assert.equal(deriveBuddy(asked).mode, "idle");
-  const granted = snapshot({ permissions: { microphone: "granted", screen: "granted" } });
+  const granted = snapshot({ permissions: { microphone: "granted", audio: "granted" } });
   assert.equal(deriveBuddy(granted).mode, "idle");
   assert.equal(deriveBuddy(snapshot()).needsAccess, false);
 });
 
-test("menu offers access while the microphone or screen is not allowed", () => {
+test("menu offers access while the microphone or call audio is not allowed", () => {
   const missing = trayMenu(
-    menuState({ permissions: { microphone: "granted", screen: "denied" } }),
+    menuState({ permissions: { microphone: "granted", audio: "denied" } }),
     "darwin",
   );
-  assert.equal(findItem(missing, "allow-access").label, "Allow Microphone and Screen…");
+  assert.equal(findItem(missing, "allow-access").label, "Allow Microphone and Call Audio…");
   const granted = trayMenu(
-    menuState({ permissions: { microphone: "granted", screen: "granted" } }),
+    menuState({ permissions: { microphone: "granted", audio: "granted" } }),
     "darwin",
   );
   assert.equal(findItem(granted, "allow-access"), null);
   assert.equal(findItem(trayMenu(menuState(), "win32"), "allow-access"), null);
+});
+
+const { hasAudioTap, hasSystemPicker } = require("../src/services/macos.cjs");
+test("call audio uses a tap from macOS 14.2 and snapshots the picker from macOS 15", () => {
+  assert.equal(hasAudioTap("darwin", "23.1.0"), false);
+  assert.equal(hasAudioTap("darwin", "23.2.0"), true);
+  assert.equal(hasAudioTap("darwin", "27.0.0"), true);
+  assert.equal(hasAudioTap("win32", "10.0.26100"), false);
+  assert.equal(hasSystemPicker("darwin", "23.6.0"), false);
+  assert.equal(hasSystemPicker("darwin", "24.0.0"), true);
+  assert.equal(hasSystemPicker("win32", "10.0.26100"), false);
 });

@@ -347,7 +347,7 @@ function renderSetup() {
   show($("step-access"), Boolean(access));
   if (access) {
     const allowed =
-      access.microphone === "granted" && access.screen === "granted";
+      access.microphone === "granted" && access.audio === "granted";
     $("step-access").classList.toggle("done", allowed);
     show($("access"), !allowed);
     prop($("access"), "disabled", askingAccess);
@@ -355,8 +355,8 @@ function renderSetup() {
     setText(
       $("access-text"),
       allowed
-        ? "Allowed. I can hear the call and read the screen."
-        : "Lets me hear the call and read the screen when you ask. macOS asks once.",
+        ? "Allowed. I can hear you and the call."
+        : "Lets me hear you and the call. macOS asks once for each.",
     );
   }
   keys($("setup-keys"));
@@ -862,9 +862,53 @@ async function loadWindows() {
   }
   layout();
 }
+// macOS 15+: the system picker lets the person choose a window, so Screening
+// needs no screen recording access. One frame becomes the attachment.
+async function pickWithSystem() {
+  await api.request("pick-window");
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (error) {
+    if (error.name === "NotAllowedError") return; // The picker was closed.
+    throw new Error(
+      error.name === "AbortError"
+        ? "The window picker closed before a window was chosen. Press Snapshot and pick a window within 10 seconds."
+        : error.message,
+    );
+  }
+  const [track] = stream.getVideoTracks();
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.srcObject = stream;
+    await video.play();
+    // The first frames can be blank until the capture has a picture.
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1000);
+      video.requestVideoFrameCallback(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    const scale = Math.min(1, 1600 / video.videoWidth, 1200 / video.videoHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    await api.request("window-image", {
+      name: track.label,
+      dataUrl: canvas.toDataURL("image/png"),
+    });
+    startTyping(input);
+  } finally {
+    stream.getTracks().forEach((t) => t.stop());
+  }
+}
 $("snapshot").addEventListener(
   "click",
   safe(async () => {
+    if (current?.systemPicker) return pickWithSystem();
     picking = true;
     render(current);
     await loadWindows();

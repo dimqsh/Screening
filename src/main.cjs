@@ -25,6 +25,7 @@ const { trayMenu, KEYS } = require("./tray-menu.cjs");
 const { formatElapsed } = require("./buddy-model.js");
 const { speechModel } = require("./services/speech-model.cjs");
 const { lightSnapshot, engineSnapshot } = require("./services/snapshot.cjs");
+const { hasAudioTap, hasSystemPicker } = require("./services/macos.cjs");
 
 app.setName("Screening");
 // Preserve settings and the model cache from versions named Capture Lab.
@@ -74,38 +75,67 @@ const permission = () =>
     ? systemPreferences.getMediaAccessStatus("screen")
     : "not-required";
 const buddyShown = () => (state.testing ? true : !state.hidden);
-// Microphone and screen access on macOS, re-read at most every two seconds.
+// Microphone and call-audio access on macOS. Call audio uses a Core Audio
+// tap, whose permission only the tap helper can read, so that answer is
+// cached and re-read in the background at most every 15 seconds. Before
+// macOS 14.2 call audio goes through ScreenCaptureKit and screen recording.
 let accessCache = null;
+let callAudio = { status: "not-determined", at: 0, reading: null };
+function readCallAudio() {
+  if (!hasAudioTap()) return Promise.resolve();
+  callAudio.reading ??= execFile(helperPath("audio-tap"), ["--status"], { timeout: 5000 })
+    .then(({ stdout }) => stdout.trim(), () => "")
+    .then((value) => {
+      const status = ["granted", "denied"].includes(value) ? value : "not-determined";
+      const changed = status !== callAudio.status;
+      callAudio = { status, at: Date.now(), reading: null };
+      if (changed) {
+        accessCache = null;
+        publish();
+      }
+    });
+  return callAudio.reading;
+}
 function access() {
   if (process.platform !== "darwin") return null;
   if (accessCache && Date.now() - accessCache.at < 2000) return accessCache.value;
+  if (Date.now() - callAudio.at > 15000) readCallAudio();
   const value = {
     microphone: systemPreferences.getMediaAccessStatus("microphone"),
-    screen: systemPreferences.getMediaAccessStatus("screen"),
+    audio: hasAudioTap() ? callAudio.status : permission(),
   };
   accessCache = { at: Date.now(), value };
   return value;
 }
 const SETTINGS_PANE = "x-apple.systempreferences:com.apple.preference.security";
-// Asks for everything Buddy needs in one go: microphone first, then screen
-// recording. macOS cannot be asked twice, so a denied item opens its page.
+// Asks for everything Buddy needs in one go: the microphone, then call audio.
+// Both prompts have an Allow button. macOS cannot ask twice, so a denied item
+// opens its page; System Audio Recording Only sits on the screen recording page.
 async function allowAccess() {
   if (process.platform !== "darwin") return;
   if (systemPreferences.getMediaAccessStatus("microphone") === "not-determined")
     await systemPreferences.askForMediaAccess("microphone");
-  if (permission() !== "granted")
+  if (hasAudioTap())
+    await execFile(helperPath("audio-tap"), ["--request"], { timeout: 120000 }).catch(() => {});
+  else if (permission() !== "granted")
     await desktopCapturer
       .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
       .catch(() => {});
+  await readCallAudio();
   accessCache = null;
   const now = access();
   if (now.microphone === "denied")
     await shell.openExternal(`${SETTINGS_PANE}?Privacy_Microphone`);
-  else if (now.screen !== "granted")
+  else if (now.audio !== "granted")
     await shell.openExternal(`${SETTINGS_PANE}?Privacy_ScreenCapture`);
   await interview.request("setting", { key: "accessPrompted", value: true });
   publish();
 }
+// Buddy may start a window capture only right after the person presses
+// Snapshot, and the system picker then lets them choose what to share.
+let pickingUntil = 0;
+const buddyPicking = (contents) =>
+  contents === buddy?.webContents && Date.now() < pickingUntil;
 const snapshot = () => ({
   ...state,
   buddy: { enabled: !state.hidden, layout: buddyLayout },
@@ -115,6 +145,8 @@ const snapshot = () => ({
   interview: interview?.state,
   audioControl,
   permission: permission(),
+  // Verification keeps Buddy's own window list, which a test can click.
+  systemPicker: hasSystemPicker() && !verification,
   supported: ["darwin", "win32"].includes(process.platform),
 });
 // Each window gets only what it uses: Buddy no full images, the engine one flag.
@@ -644,6 +676,8 @@ app
   .whenReady()
   .then(async () => {
     if (process.platform === "darwin") app.dock?.hide();
+    // Buddy's first look already knows whether call audio is allowed.
+    await readCallAudio();
     ipcMain.handle("lab:state", (event) =>
       event.senderFrame === engine?.webContents.mainFrame
         ? engineSnapshot(snapshot())
@@ -652,17 +686,19 @@ app
     session.defaultSession.setPermissionRequestHandler(
       (contents, permission, callback, details) => {
         callback(
-          contents === engine?.webContents &&
-            permission === "media" &&
-            details.mediaTypes?.every((t) => t === "audio"),
+          permission === "media" &&
+            ((contents === engine?.webContents &&
+              details.mediaTypes?.every((t) => t === "audio")) ||
+              // A window capture asks for media with no camera or microphone.
+              (buddyPicking(contents) && !details.mediaTypes?.length)),
         );
       },
     );
     session.defaultSession.setPermissionCheckHandler(
       (contents, permission, _origin, details) =>
-        contents === engine?.webContents &&
         permission === "media" &&
-        details.mediaType === "audio",
+        ((contents === engine?.webContents && details.mediaType === "audio") ||
+          buddyPicking(contents)),
     );
     session.defaultSession.setDisplayMediaRequestHandler(
       async (request, callback) => {
@@ -684,6 +720,8 @@ app
           callback(null);
         }
       },
+      // On macOS 15+ Buddy's snapshots go through the system window picker.
+      { useSystemPicker: true },
     );
     session.defaultSession.webRequest.onBeforeRequest((details, callback) =>
       callback({ cancel: /^https?:|^wss?:/.test(details.url) }),
@@ -836,6 +874,13 @@ app
       if (!ownFrame(event)) throw new Error("Untrusted frame");
       if (op === "audio-start") return audio("start", payload);
       if (op === "allow-access") return allowAccess();
+      if (op === "pick-window") {
+        if (event.senderFrame !== buddy?.webContents.mainFrame)
+          throw new Error("Only Buddy can take a snapshot.");
+        pickingUntil = Date.now() + 120000;
+        return;
+      }
+      if (op === "window-image") pickingUntil = 0;
       if (op === "audio-stop") return audio("stop");
       if (["recording", "stop", "audio-error"].includes(op)) {
         if (!fromEngine(event))

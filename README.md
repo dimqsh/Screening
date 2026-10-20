@@ -20,7 +20,7 @@ There are no other windows. A small island icon in the menu bar is the way in.
 2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with its setup steps.
 3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
 4. **Sign in with ChatGPT.** The bundled official Codex CLI opens your browser. Your ChatGPT plan, model access and limits apply. This does not turn a ChatGPT subscription into an OpenAI API key.
-5. **Allow microphone and screen access** on a Mac. One button asks for both. If macOS opens System Settings instead, turn on Screening there and choose **Quit & Reopen**. You can do this later from the menu.
+5. **Allow the microphone and call audio** on a Mac. One button asks for both, and each macOS prompt has an **Allow** button. Screening does not need screen recording on macOS 15 or later. If you turned one down before, System Settings opens on its page; call audio is under **System Audio Recording Only**. You can do this later from the menu, and updates keep both.
 6. In Buddy, press **Call audio** to listen to the interviewer, or **Microphone** to listen to yourself. Press it again, now labeled **Stop**, to stop.
 7. When the interviewer finishes a question, press Cmd/Ctrl+Shift+Enter. Buddy opens and streams the answer under your camera.
 
@@ -34,7 +34,7 @@ There are no other windows. A small island icon in the menu bar is the way in.
   - **Transcript**: what was heard, with times, and **Answer what was just said**.
   - **Notes**: talking points. Turn on **Use notes in answers** to send them with your questions.
   - **You**: your target role, skills and real wins. Buddy uses only what you write here and never makes up achievements.
-- **Snapshot** a window to send a coding task or a diagram. Buddy takes one image, shows it in the box, and sends it with your next message.
+- **Snapshot** a window to send a coding task or a diagram. Buddy takes one image, shows it in the box, and sends it with your next message. On macOS 15 and later, Snapshot opens the macOS window picker, so Screening needs no screen recording access; choose the window within about 10 seconds. On macOS 14 and Windows, Buddy shows its own window list.
 - Buddy never takes the keyboard on its own, so Zoom, Meet or Teams keeps it. Buddy takes the keyboard only while you type in one of its fields, and gives it back when you send, press Escape or click elsewhere. Outside the island, clicks pass through to the apps below.
 - **Drag Buddy by its top bar** to take it off the notch. It becomes a small window you can leave anywhere, and Screening remembers where. **Snap Buddy to the Notch** in the menu puts it back.
 - Floating Buddy, and Buddy on screens narrower than 1400 points, use a compact layout: a narrower island with the face and steps above the chips.
@@ -42,7 +42,7 @@ There are no other windows. A small island icon in the menu bar is the way in.
 
 ## The menu-bar menu
 
-Click the island icon in the menu bar for everything else: start or stop listening, answer, ask, show or hide Buddy, **Float Buddy** or **Snap Buddy to the Notch**, **Allow Microphone and Screen…** while either is off, interview type, answer length, automatic answers, notes in answers, speech and answer language, **Hide From Screen Sharing**, **Test Screen Sharing Protection**, setup status, **Export Session**, **New Session** and **Quit**. While Screening listens, the icon fills in and the menu bar shows the elapsed time.
+Click the island icon in the menu bar for everything else: start or stop listening, answer, ask, show or hide Buddy, **Float Buddy** or **Snap Buddy to the Notch**, **Allow Microphone and Call Audio…** while either is off, interview type, answer length, automatic answers, notes in answers, speech and answer language, **Hide From Screen Sharing**, **Test Screen Sharing Protection**, setup status, **Export Session**, **New Session** and **Quit**. While Screening listens, the icon fills in and the menu bar shows the elapsed time.
 
 | Action                       | Shortcut             |
 | ---------------------------- | -------------------- |
@@ -66,7 +66,7 @@ The interface is in English. Speech and answers default to English. You can pick
 
 Synthetic voices are cleaner than a real call, so expect more errors in noise and with strong accents. The Accurate model needs a fast CPU to keep up with live speech, which is why it is the default only on Apple Silicon.
 
-Audio is processed in about eight-second chunks. The waveform moves before the first line arrives. Stop sends the remaining audio through Whisper. A bundled Silero detector skips chunks without speech before Whisper runs; it does not tell speakers apart. Call audio can include sound from other apps. The local queue is bounded: if the computer cannot keep up, Screening reports an error instead of buffering without limit.
+Audio is processed in about eight-second chunks. The waveform moves before the first line arrives. Stop sends the remaining audio through Whisper. A bundled Silero detector skips chunks without speech before Whisper runs; it does not tell speakers apart. Call audio can include sound from other apps. On macOS 14.2 and later it comes from a Core Audio tap, which needs only System Audio Recording; before that it goes through ScreenCaptureKit, which needs screen recording. The local queue is bounded: if the computer cannot keep up, Screening reports an error instead of buffering without limit.
 
 ## Account and data
 
@@ -84,11 +84,13 @@ Buddy asks the operating system to leave it out of screen capture before it firs
 
 Historical results: version 0.1.0 was tested with Google Meet sharing the whole built-in screen on macOS 27.0.1 and Chrome 155. Two connections joined from the same Mac showed the overlay with protection off and left it out with protection on. That was not a second physical device. Version 0.6.0 ran the A/B check on macOS 27: with protection on, both the Electron and the ScreenCaptureKit paths dropped Buddy’s marker. No private meeting screenshots are included in this repository.
 
+The test captures the screen itself, so it is the one feature that asks for screen recording on macOS 15.
+
 Capture exclusion is not a universal bypass. Electron documents that newer macOS ScreenCaptureKit recorders may ignore the flag, and Windows limits the guarantee to supported capture APIs. Screening does not bypass microphone or screen permissions, app security controls or process inspection.
 
 ## Development
 
-Node.js 22+ and npm. Xcode command-line tools compile the three macOS helpers: window capture, call audio and notch geometry.
+Node.js 22+ and npm. Xcode command-line tools compile the macOS helpers: window capture, call audio (a Core Audio tap, and ScreenCaptureKit for macOS before 14.2) and notch geometry.
 
 ```sh
 npm ci
@@ -107,9 +109,11 @@ The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.h
 
 To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
 
-The release workflows build the DMG and the EXE, then run `--verify --interview-test` on the packaged app (the EXE after a silent install). It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
+The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test` on it. The Mac DMG must be signed with Screening’s certificate, so it is built with `npm run package:mac` on a Mac that has the certificate until the macOS workflow passes the signing secrets. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 
-Installers are not signed with a publisher certificate; the Mac bundle is ad-hoc signed. Gatekeeper and SmartScreen may ask you to confirm opening it; `install.sh` removes the download quarantine so the app opens directly. macOS keys permissions to the signature, so after an update it may ask for microphone and screen access again. There is no auto-update; run the install line again to update.
+The Mac app is signed with Screening’s own certificate, not an Apple Developer ID, and it is not notarized. macOS remembers the microphone and call audio permissions by that certificate, so updates keep them. Versions before 0.7.1 were ad-hoc signed, so macOS treated every update as a new app. Gatekeeper may still ask you to confirm a DMG downloaded in a browser, and SmartScreen may ask on Windows; `install.sh` removes the download quarantine so the app opens directly. There is no auto-update; run the install line again to update.
+
+`npm run package:mac` signs with `~/.screening-signing/screening-signing.p12` and the password in `password.txt` next to it, or with the `SCREENING_SIGN_P12` (a file path or base64) and `SCREENING_SIGN_PASSWORD` environment variables. Without a certificate, a local build is ad-hoc signed, and a GitHub Actions build fails rather than ship a release that loses everyone’s access. Keep the certificate backed up: a release signed with a different one makes every user allow access again.
 
 ## Sources and licenses
 

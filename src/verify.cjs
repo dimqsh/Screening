@@ -218,7 +218,7 @@ module.exports = async function verify(ctx) {
   const firstRun = access();
   if (firstRun) {
     const missing =
-      firstRun.microphone !== "granted" || firstRun.screen !== "granted";
+      firstRun.microphone !== "granted" || firstRun.audio !== "granted";
     const ready = await scene(null, { messages: [], transcript: [] });
     check("A fresh install asks for missing microphone or screen access", () =>
       assert.equal(ready.mode === "setup", missing),
@@ -241,7 +241,7 @@ module.exports = async function verify(ctx) {
     if (firstRun)
       assert.equal(
         setup.accessDone,
-        firstRun.microphone === "granted" && firstRun.screen === "granted",
+        firstRun.microphone === "granted" && firstRun.audio === "granted",
       );
   });
   await click("dismiss");
@@ -454,6 +454,18 @@ module.exports = async function verify(ctx) {
   publish();
   await assert.rejects(interview.request("window-capture", "window:unknown:0"));
   checks.push({ name: "Unknown window capture is rejected", passed: true });
+  // A frame from the system window picker becomes the same kind of attachment.
+  const frame = (await buddy.webContents.capturePage()).resize({ width: 2400 });
+  await interview.request("window-image", { name: "Picked window", dataUrl: frame.toDataURL() });
+  const picked = interview.state.attachment;
+  await assert.rejects(interview.request("window-image", { name: "x", dataUrl: "data:text/html,hi" }));
+  await interview.request("remove-attachment");
+  check("A picked window frame becomes one sized attachment", () => {
+    assert.equal(picked.name, "Picked window");
+    assert.ok(picked.width <= 1600 && picked.height <= 1200);
+    assert.ok(picked.dataUrl.startsWith("data:image/png;base64,"));
+    assert.ok(picked.preview.startsWith("data:image/jpeg;base64,"));
+  });
   await js(pin);
   await delay(200);
 

@@ -211,7 +211,7 @@ class Transcription {
         child.kill();
         reject(
           new Error(
-            "System audio did not start. Check Screen & System Audio Recording permission.",
+            "Call audio did not start. Check Screening under System Audio Recording Only in Privacy & Security.",
           ),
         );
       }, 15000);
@@ -268,7 +268,7 @@ class Transcription {
         }
         const message =
           diagnostic.replace("SCREENING_AUDIO_READY", "").trim().slice(-400) ||
-          "System audio capture stopped. Check audio/screen permissions.";
+          "Call audio stopped. Check Screening under System Audio Recording Only in Privacy & Security.";
         this.update({
           recording: false,
           ...((code && code !== 0) || !ready ? { error: message } : {}),

@@ -1,6 +1,6 @@
 {
   "name": "screening",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Interview answers at your MacBook notch, right under your camera. Local Whisper, ChatGPT answers, hidden from screen sharing.",
   "main": "src/main.cjs",
   "private": true,
@@ -69,7 +69,7 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Screening transcribes your microphone on this computer while you listen.",
         "NSAudioCaptureUsageDescription": "Screening transcribes the call audio you choose, on this computer.",
-        "NSScreenCaptureUsageDescription": "Screening snapshots a window only when you ask, and uses screen access for call audio and the screen sharing test.",
+        "NSScreenCaptureUsageDescription": "Screening uses screen access for the screen sharing test, and on macOS 14 for snapshots and call audio.",
         "LSUIElement": true
       },
       "extraResources": [
@@ -79,6 +79,7 @@
           "filter": [
             "capture-sck",
             "audio-sck",
+            "audio-tap",
             "notch-info"
           ]
         }

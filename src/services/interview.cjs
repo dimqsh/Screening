@@ -3,6 +3,7 @@ const path = require("node:path");
 const { safeStorage, dialog } = require("electron");
 const { Assistant } = require("./assistant.cjs");
 const { Transcription } = require("./transcription.cjs");
+const { hasAudioTap } = require("./macos.cjs");
 const {
   modelFiles,
   speechModel,
@@ -302,6 +303,13 @@ async function createInterview(
       update();
       return;
     }
+    if (op === "window-image") {
+      if (ai.state.busy)
+        throw new Error("Stop the answer before attaching a screenshot.");
+      state.attachment = windowCapture.fromImage(payload);
+      update();
+      return;
+    }
     if (op === "remove-attachment") {
       state.attachment = null;
       update();
@@ -351,11 +359,14 @@ async function createInterview(
       state.source = "system";
       state.startedAt = Date.now();
       whisper.keepWarm(true);
+      // A Core Audio tap needs only System Audio Recording; ScreenCaptureKit,
+      // used before macOS 14.2, needs screen recording.
+      const helper = hasAudioTap() ? "audio-tap" : "audio-sck";
       try {
         await whisper.startNative(
           app.isPackaged
-            ? path.join(process.resourcesPath, "bin", "audio-sck")
-            : path.join(__dirname, "..", "..", "bin", "audio-sck"),
+            ? path.join(process.resourcesPath, "bin", helper)
+            : path.join(__dirname, "..", "..", "bin", helper),
           settings.speechLanguage,
         );
       } catch (error) {

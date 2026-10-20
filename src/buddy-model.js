@@ -45,7 +45,7 @@
     const needsAccess = Boolean(
       access &&
         !interview?.settings?.accessPrompted &&
-        (access.microphone !== "granted" || access.screen !== "granted"),
+        (access.microphone !== "granted" || access.audio !== "granted"),
     );
     if (needsWhisper || needsAccount || needsAccess)
       return { ...view, mode: "setup", needsWhisper, needsAccount, needsAccess };

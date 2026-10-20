@@ -10,7 +10,14 @@ if (process.platform !== "darwin") {
 const root = path.resolve(__dirname, "..");
 const arch = process.arch === "arm64" ? "arm64" : "x86_64";
 fs.mkdirSync(path.join(root, "bin"), { recursive: true });
-for (const helper of ["capture-sck", "audio-sck", "notch-info"])
+// macOS 15+ SDKs mark CGDisplayStream unavailable, so capture-legacy targets macOS 13.
+const helpers = {
+  "capture-sck": "14.0",
+  "capture-legacy": "13.0",
+  "audio-sck": "14.0",
+  "notch-info": "14.0",
+};
+for (const [helper, macos] of Object.entries(helpers))
   execFileSync(
     "xcrun",
     [
@@ -18,7 +25,7 @@ for (const helper of ["capture-sck", "audio-sck", "notch-info"])
       "-parse-as-library",
       "-O",
       "-target",
-      `${arch}-apple-macosx14.0`,
+      `${arch}-apple-macosx${macos}`,
       path.join(__dirname, `${helper}.swift`),
       "-o",
       path.join(root, "bin", helper),

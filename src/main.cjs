@@ -249,16 +249,19 @@ function markerPixels(image) {
   }
   return count;
 }
+// macOS helpers: ScreenCaptureKit, and the older CGDisplayStream that apps
+// such as Telegram still use.
+const captureHelpers = { sck: "capture-sck", legacy: "capture-legacy" };
 async function cropCapture(display, target, capturePath) {
-  if (capturePath === "sck") {
+  if (captureHelpers[capturePath]) {
     if (process.platform !== "darwin")
-      throw new Error("ScreenCaptureKit requires macOS.");
+      throw new Error("This capture path requires macOS.");
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), "capture-lab-roi-"));
     const filename = path.join(temp, "crop.png");
     const bounds = target.getBounds();
     try {
       await execFile(
-        helperPath("capture-sck"),
+        helperPath(captureHelpers[capturePath]),
         [
           String(display.id),
           String(bounds.x - display.bounds.x),
@@ -370,14 +373,18 @@ async function runCapture(capturePath = "electron") {
       detail: !valid
         ? "The unprotected marker was not reliably captured. Retry with the screen unlocked."
         : outcome === "visible"
-          ? "Buddy stayed visible in this capture path. Do not rely on it here."
+          ? capturePath === "legacy"
+            ? "Apps that use the older screen capture (Telegram) still show Buddy. Hide Buddy before you share your screen in them."
+            : "Buddy stayed visible in this capture path. Do not rely on it here."
           : outcome === "excluded"
             ? "Buddy disappeared from this capture path. Check what the other person sees in your meeting app."
             : "The capture changed, but the result was ambiguous.",
       capturePath:
         capturePath === "sck"
           ? "Apple ScreenCaptureKit SCStream, no excluded windows, synthetic window ROI"
-          : "Electron desktopCapturer full-display thumbnail cropped to synthetic window bounds",
+          : capturePath === "legacy"
+            ? "Apple CGDisplayStream (older apps such as Telegram), synthetic window ROI"
+            : "Electron desktopCapturer full-display thumbnail cropped to synthetic window bounds",
       baseline: baseline.toDataURL(),
       protected: protectedImage.toDataURL(),
       platform: process.platform,
@@ -403,22 +410,37 @@ async function runCapture(capturePath = "electron") {
   }
 }
 async function captureTest() {
+  const labels = {
+    electron: "Screen capture",
+    sck: "ScreenCaptureKit",
+    legacy: "Older screen capture",
+  };
   const paths =
-    process.platform === "darwin" ? ["electron", "sck"] : ["electron"];
+    process.platform === "darwin"
+      ? ["electron", "sck", "legacy"]
+      : ["electron"];
   const results = [];
   for (const capturePath of paths) results.push(await runCapture(capturePath));
   const hidden = results.every((r) => r.outcome === "excluded");
+  // CGDisplayStream ignores the sharing flag on macOS 27. That is a known
+  // limit for apps such as Telegram, not a failure of the protection itself.
+  const onlyOlderApps =
+    !hidden &&
+    results.every((r, i) =>
+      paths[i] === "legacy"
+        ? r.outcome === "visible"
+        : r.outcome === "excluded",
+    );
   if (process.platform === "darwin") app.focus({ steal: true });
   await dialog.showMessageBox({
     type: hidden ? "info" : "warning",
     message: hidden
       ? "Buddy was hidden from screen capture."
-      : "Buddy was not hidden in every test.",
+      : onlyOlderApps
+        ? "Buddy was hidden from modern screen capture."
+        : "Buddy was not hidden in every test.",
     detail: results
-      .map(
-        (r) =>
-          `${r.capturePath?.startsWith("Apple") ? "ScreenCaptureKit" : "Screen capture"}: ${r.detail}`,
-      )
+      .map((r, i) => `${labels[paths[i]]}: ${r.detail}`)
       .join("\n\n"),
   });
   return results;

@@ -9,13 +9,13 @@ There are no other windows. A small island icon in the menu bar is the way in.
 ## Get started
 
 1. Install Screening.
-   - **Mac (Apple Silicon):** paste this in Terminal. It downloads the newest DMG, copies Screening to Applications and opens it.
+   - **Mac (Apple silicon or Intel), macOS 14 or later:** paste this in Terminal. It downloads the newest DMG for your Mac, copies Screening to Applications and opens it.
 
      ```sh
      curl -fsSL https://raw.githubusercontent.com/dimqsh/Screening/main/install.sh | bash
      ```
 
-     Or download the DMG from [Releases](https://github.com/dimqsh/Screening/releases), drag Screening to Applications, then right-click it and choose **Open** the first time.
+     Or download the DMG from [Releases](https://github.com/dimqsh/Screening/releases) (`mac-arm64` for Apple silicon, `mac-x64` for Intel), drag Screening to Applications, then right-click it and choose **Open** the first time.
    - **Windows (x64):** run the EXE from [Releases](https://github.com/dimqsh/Screening/releases). If SmartScreen warns, choose **More info**, then **Run anyway**.
 2. Open Screening. The island icon appears in the menu bar, and Buddy opens at the notch with its setup steps.
 3. **Download the speech model**, once. On Apple Silicon Macs Screening uses the Accurate model (Whisper large-v3-turbo, about 1 GB); on other computers it uses the Fast model (Whisper base, 77 MB). You can switch in the menu. After that, transcription works offline.
@@ -61,10 +61,10 @@ The interface is in English. Speech and answers default to English. You can pick
 
 | Model | Download | Time per 8-second chunk | Words wrong, average | Ukrainian | Kazakh |
 | --- | --- | --- | --- | --- | --- |
-| Accurate: large-v3-turbo, 8-bit encoder | about 1 GB | about 3.5 s | 5% | 9% | 25% |
+| Accurate: large-v3-turbo, 8-bit encoder | about 1 GB | 5–8 s | 5% | 9% | 25% |
 | Fast: base, 8-bit | 77 MB | about 0.7 s | 17% | 36% | not recognized |
 
-Synthetic voices are cleaner than a real call, so expect more errors in noise and with strong accents. The Accurate model needs a fast CPU to keep up with live speech, which is why it is the default only on Apple Silicon.
+Synthetic voices are cleaner than a real call, so expect more errors in noise and with strong accents. The Accurate model needs a fast CPU to keep up with live speech, which is why it is the default only on Apple Silicon. Its time per chunk depends on what else the Mac is doing: 5.2–7.9 s on an M3 Pro with other apps busy, so a heavily loaded Mac can fall behind; switch to Fast in the menu then.
 
 Audio is processed in about eight-second chunks. The waveform moves before the first line arrives. Stop sends the remaining audio through Whisper. A bundled Silero detector skips chunks without speech before Whisper runs; it does not tell speakers apart. Call audio can include sound from other apps. On macOS 14.2 and later it comes from a Core Audio tap, which needs only System Audio Recording; before that it goes through ScreenCaptureKit, which needs screen recording. The local queue is bounded: if the computer cannot keep up, Screening reports an error instead of buffering without limit.
 
@@ -74,7 +74,7 @@ ChatGPT sign-in uses the official, bundled `@openai/codex` CLI. Screening never 
 
 Whisper receives audio on your computer. ChatGPT receives the typed question or the latest four transcript chunks, your background from the **You** tab, a bounded recent conversation, and notes only when **Use notes in answers** is on. A window snapshot is sent once, with the next message. The temporary image file is removed after the request or when Screening quits. Window thumbnails in the picker stay on your computer. Nothing watches the active window or captures it on a timer. Requests use ephemeral, read-only Codex execution, ignore user config, plugins and MCP, and disable shell and web tools. Answers need internet and count against your Codex allowance. Screening is an independent project, not an OpenAI product.
 
-Whisper runs in its own process at a lower CPU priority, so the meeting app and Buddy stay smooth while it works. It loads into memory when you start listening, and unloads 90 seconds after you stop or after the last transcription. A loaded model uses about 0.7 GB (Fast) or 2.4 GB (Accurate); an idle Screening uses about 120 MB in total.
+Whisper runs in its own process at a lower CPU priority, so the meeting app and Buddy stay smooth while it works. It loads into memory when you start listening, and unloads 90 seconds after you stop or after the last transcription. A loaded model uses about 0.7 GB (Fast) or up to 2.4 GB (Accurate); an idle Screening uses about 230–290 MB in total (the memory footprint of all its processes on an M3 Pro) and about 3–6% of one CPU core.
 
 Audio, transcripts, answers, notes and snapshots stay in memory and are not saved automatically. Buddy keeps up to 60 messages and six snapshots; ChatGPT gets the latest 12 messages within a 24,000-character budget. Follow-ups use the text history; older snapshots are not sent again. **Export Session** saves the transcript, the conversation and your notes as text. **New Session** clears them. Preferences persist on your computer. Your background is encrypted with the OS key store when one is available; otherwise it stays in memory. The speech model and the Codex sign-in are stored separately and never ship with the source or the installers.
 
@@ -82,7 +82,7 @@ Audio, transcripts, answers, notes and snapshots stay in memory and are not save
 
 Buddy asks the operating system to leave it out of screen capture before it first appears. **Test Screen Sharing Protection** in the menu shows a synthetic card in Buddy and compares a magenta marker with protection off and on, on each capture path the system offers. A missing unprotected marker counts as inconclusive. Always check what the other person sees in your meeting app.
 
-On macOS 14+, Buddy presents its pixels through a native `AVSampleBufferDisplayLayer` with `preventsCapture` enabled. A dedicated layer-hosting NSView owns this layer directly: the layer is assigned before enabling `wantsLayer`, without an intermediate AppKit backing layer. Its original Chromium view remains in place for input, with its ordinary drawing suppressed. The protected companion follows Buddy's position and visibility and passes mouse events through. Frames stay in memory; this does not record the desktop. A presentation failure hides Buddy instead of falling back to unprotected drawing.
+On macOS 14+, Buddy presents its pixels through a native `AVSampleBufferDisplayLayer` with `preventsCapture` enabled. A dedicated layer-hosting NSView owns this layer directly: the layer is assigned before enabling `wantsLayer`, without an intermediate AppKit backing layer. Its original Chromium view remains in place for input, with its ordinary drawing suppressed. The protected companion follows Buddy's position and visibility and passes mouse events through. Frames stay in memory; this does not record the desktop. Chromium hands over a new frame only when Buddy's pixels change, at up to 30 frames a second, so an idle Buddy sends none. A presentation failure hides Buddy instead of falling back to unprotected drawing.
 
 The macOS test includes an independent `CGDisplayStream` recorder in addition to Electron and ScreenCaptureKit. Before the test turns protection off, it waits for the synthetic card and discards the previous presentation layer and its queued images.
 
@@ -98,25 +98,63 @@ Capture exclusion is not a universal bypass. Electron documents that newer macOS
 
 ## Development
 
-Node.js 22+ and npm; macOS 14+ for the Mac app. Xcode command-line tools compile the macOS helpers and the N-API protected presentation module.
+What you need:
+
+- **Every platform:** Node.js 24 and npm 11. `.nvmrc` names the version, so `nvm use` picks it.
+- **macOS, Apple silicon or Intel:** macOS 14 or later and the Xcode Command Line Tools (`xcode-select --install`). They compile the macOS helpers and the N-API protected presentation module.
+- **Intel Macs, once:** Python 3 and CMake 3.28 or later. ONNX Runtime has published no macOS x86_64 build since 1.23, so `npm run build:onnxruntime:x64` builds version 1.30 from source into `build/onnxruntime-darwin-x64` and installs it into `node_modules`. On an M3 Pro, cross-compiling with 6 jobs, it took 17 minutes; run it again after `npm ci`, which replaces `node_modules`.
+- **Windows 10 or 11, x64:** nothing else.
+
+Run from source on a Mac with Apple silicon:
 
 ```sh
 npm ci
-npm run build:native # macOS; skipped on Windows
+npm run build:native
 npm start
+```
+
+On an Intel Mac:
+
+```sh
+npm ci
+npm run build:onnxruntime:x64
+npm run build:native
+npm start
+```
+
+On Windows, in PowerShell:
+
+```powershell
+npm ci
+npm start
+```
+
+Checks:
+
+```sh
 npm test
 npm run verify
-npm run verify:capture # needs screen permission; shows a synthetic marker
+npm run verify:capture # macOS; needs screen permission; shows a synthetic marker
 npm run verify:protected # macOS native input/lifecycle and continuous CGDisplayStream checks
-npm run package:mac # Apple Silicon DMG, on macOS
+```
+
+Packages:
+
+```sh
+npm run package:mac # Apple silicon DMG, on a Mac
+npm run package:mac:x64 # Intel DMG, after npm run build:onnxruntime:x64
 npm run package:win # x64 NSIS EXE, on Windows
 ```
+
+An Intel DMG built on Apple silicon needs the x64 Codex, sharp and Electron. Install them in a separate checkout with `npm_config_arch=x64 npm ci --cpu=x64 --os=darwin`, then run the Intel commands there.
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request, on `macos-15` (Apple silicon), `macos-15-intel` and `windows-latest`: unit tests, an unsigned package and the packaged app with `--verify --interview-test`.
 
 The app is three pieces. `src/buddy.*` is the only visible window. `src/engine.html` is a hidden window that owns microphone and Windows call-audio capture. `src/main.cjs` runs the menu-bar icon, shortcuts, notch placement and screen-sharing protection; `src/tray-menu.cjs` builds the menu.
 
 `npm run verify` checks that Buddy is the only visible window, the engine stays hidden, there is no Dock icon, the menu-bar icon exists, and protection, focus hand-off, notch placement, floating and snapping back, the access step, notes, background, paste and English text all work. It saves screenshots of Buddy’s states in `validation/` using synthetic data; no account request is made.
 
-To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
+To test real speech, run `node scripts/prepare-speech-test.cjs`, set `CAPTURE_LAB_TEST_AUDIO` to the absolute `build/jfk.f32` path, and run `npm run verify:audio`: `CAPTURE_LAB_TEST_AUDIO="$PWD/build/jfk.f32" npm run verify:audio` on a Mac, `$env:CAPTURE_LAB_TEST_AUDIO = "$PWD\build\jfk.f32"; npm run verify:audio` in PowerShell. `--interview-test` transcribes the public JFK sample with real Whisper. `--audio-test` presses Buddy’s Microphone chip and feeds the sample through a synthetic MediaStream and a real AudioWorklet in the hidden engine, hides and shows Buddy while it listens, and checks the final transcript; it does not test a physical microphone. `--system-audio-test` on macOS expects speech played on the computer after the `native-audio-ready` marker. `--live-ai-test` and `--vision-test` make real ChatGPT requests: the vision test snapshots a synthetic coding task through the OS picker, asks for a solution and a follow-up, and checks Copy.
 
 The Windows release workflow builds and installs the EXE, then runs `--verify --interview-test` on it. The Mac DMG must be signed with Screening’s certificate, so it is built with `npm run package:mac` on a Mac that has the certificate until the macOS workflow passes the signing secrets. It does not check a meeting recipient’s view or the sign-in flow on a Windows account.
 

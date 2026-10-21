@@ -4,17 +4,52 @@ function protectPresentation(window, binary, onError) {
   const native = require(binary);
   const handle = native.attach(window.getNativeWindowHandle());
   let stopped = false;
-  let timer;
   let inFlight = null;
   let failed = false;
   let paused = false;
+  let subscribed = false;
   let diagnosticFrames = 0;
+  // When the newest frame reached the native layer, so a slower explicit
+  // capture never replaces it with an older picture.
+  let presentedAt = 0;
 
+  function fail(error) {
+    if (stopped || failed) return;
+    failed = true;
+    unsubscribe();
+    window.hide();
+    native.close(handle);
+    onError(new Error(`Buddy's protected display stopped: ${error.message}`));
+  }
+  function present(image) {
+    if (image.isEmpty()) throw new Error("Buddy did not produce a display frame.");
+    const { width, height } = image.getSize();
+    native.frame(handle, image.toBitmap(), width, height);
+    presentedAt = performance.now();
+    const status = native.status(handle);
+    if (process.env.SCREENING_DISPLAY_DIAGNOSTICS === "1" && ++diagnosticFrames % 60 === 0) {
+      const pixels = image.toBitmap();
+      let nontransparent = 0;
+      for (let index = 3; index < pixels.length; index += 4)
+        if (pixels[index]) nontransparent++;
+      console.error(JSON.stringify({
+        displayDiagnostics: true, time: new Date().toISOString(),
+        pid: process.pid, bounds: window.getBounds(),
+        width, height, nontransparent, status,
+      }));
+    }
+    if (!status.sourceSuppressed)
+      throw new Error("Buddy's protected presentation lost its source view.");
+    if (!status.layerHosted)
+      throw new Error("Buddy's protected display layer was detached.");
+  }
+  // An explicit frame: at load, on show, and when a test needs one now.
   async function refresh() {
     if (stopped || failed || window.isDestroyed()) return;
     if (inFlight) return inFlight;
     inFlight = (async () => {
       try {
+        const requestedAt = performance.now();
         let deadline;
         const image = await Promise.race([
           // Allow Chromium's page to render even when the companion occludes
@@ -25,32 +60,10 @@ function protectPresentation(window, binary, onError) {
           }),
         ]).finally(() => clearTimeout(deadline));
         if (stopped || failed || window.isDestroyed()) return;
-        if (image.isEmpty()) throw new Error("Buddy did not produce a display frame.");
-        const { width, height } = image.getSize();
-        native.frame(handle, image.toBitmap(), width, height);
-        const status = native.status(handle);
-        if (process.env.SCREENING_DISPLAY_DIAGNOSTICS === "1" && ++diagnosticFrames % 60 === 0) {
-          const pixels = image.toBitmap();
-          let nontransparent = 0;
-          for (let index = 3; index < pixels.length; index += 4)
-            if (pixels[index]) nontransparent++;
-          console.error(JSON.stringify({
-            displayDiagnostics: true, time: new Date().toISOString(),
-            pid: process.pid, bounds: window.getBounds(),
-            width, height, nontransparent, status,
-          }));
-        }
-        if (!status.sourceSuppressed)
-          throw new Error("Buddy's protected presentation lost its source view.");
-        if (!status.layerHosted)
-          throw new Error("Buddy's protected display layer was detached.");
+        if (presentedAt > requestedAt && !paused) return;
+        present(image);
       } catch (error) {
-        if (!stopped) {
-          failed = true;
-          window.hide();
-          native.close(handle);
-          onError(new Error(`Buddy's protected display stopped: ${error.message}`));
-        }
+        fail(error);
       }
     })();
     try {
@@ -59,12 +72,25 @@ function protectPresentation(window, binary, onError) {
       inFlight = null;
     }
   }
-  async function tick() {
-    if (stopped || failed) return;
-    if (!paused && window.isVisible()) await refresh();
-    sync();
-    // One frame in flight; slow capture or rendering never creates a queue.
-    if (!stopped && !failed) timer = setTimeout(tick, 33);
+  // Chromium hands over a frame only when Buddy's pixels change, so an idle
+  // Buddy costs no captures; animations arrive at up to 30 frames a second.
+  function onFrame(image) {
+    if (stopped || failed || paused || window.isDestroyed()) return;
+    try {
+      present(image);
+    } catch (error) {
+      fail(error);
+    }
+  }
+  function subscribe() {
+    if (subscribed || stopped || failed || window.isDestroyed()) return;
+    window.webContents.beginFrameSubscription(false, onFrame);
+    subscribed = true;
+  }
+  function unsubscribe() {
+    if (!subscribed) return;
+    subscribed = false;
+    if (!window.isDestroyed()) window.webContents.endFrameSubscription();
   }
   const sync = (visible) => {
     if (!stopped && !failed) {
@@ -74,11 +100,11 @@ function protectPresentation(window, binary, onError) {
   const stop = () => {
     if (stopped) return;
     stopped = true;
-    clearTimeout(timer);
+    unsubscribe();
     native.close(handle);
   };
   window.webContents.once("did-finish-load", () => {
-    refresh().then(tick);
+    refresh().then(subscribe);
   });
   window.webContents.on("render-process-gone", () => {
     failed = true;
@@ -86,7 +112,10 @@ function protectPresentation(window, binary, onError) {
     window.hide();
     onError(new Error("Buddy's renderer stopped. Reopen Screening to restore its protected display."));
   });
-  window.on("show", () => sync(true));
+  window.on("show", () => {
+    sync(true);
+    refresh();
+  });
   window.on("hide", () => sync(false));
   for (const event of ["move", "resize"]) window.on(event, () => sync());
   window.once("closed", stop);

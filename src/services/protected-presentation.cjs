@@ -21,6 +21,7 @@ function protectPresentation(window, binary, onError) {
   function fail(error) {
     if (stopped || failed) return;
     failed = true;
+    clearInterval(syncTimer);
     unsubscribe();
     window.hide();
     native.close(handle);
@@ -114,6 +115,7 @@ function protectPresentation(window, binary, onError) {
     if (stopped) return;
     stopped = true;
     clearTimeout(trimTimer);
+    clearInterval(syncTimer);
     unsubscribe();
     native.close(handle);
   };
@@ -134,6 +136,10 @@ function protectPresentation(window, binary, onError) {
   });
   window.on("hide", () => sync(false));
   for (const event of ["move", "resize"]) window.on(event, () => sync());
+  // A Space transition can report Buddy hidden for a moment with no show
+  // event after it; matching the window twice a second brings the protected
+  // display back. One native call, no frame.
+  const syncTimer = setInterval(() => sync(), 500);
   window.once("closed", stop);
   return {
     refresh,

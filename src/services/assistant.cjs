@@ -303,7 +303,11 @@ class Assistant {
         finished = true;
         clearTimeout(timer);
         this.child = null;
-        fs.rmSync(cwd, { recursive: true, force: true });
+        // Windows can still hold a file here (EBUSY); retry in the background
+        // instead of throwing out of this close handler.
+        fs.promises
+          .rm(cwd, { recursive: true, force: true, maxRetries: 3 })
+          .catch(() => {});
         this.cwd = null;
         if (this.canceled) {
           this.update({ busy: false, error: null });

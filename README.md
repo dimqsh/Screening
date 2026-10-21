@@ -119,6 +119,8 @@ The macOS test tries Electron's capture, ScreenCaptureKit and the older `CGDispl
 
 On macOS 27.0.1 (M3 Pro), with protection on, all three paths dropped Buddy's marker: 121,520 marker pixels became 0 with Electron's capture, 121,516 became 267 with ScreenCaptureKit, and 121,520 became 0 with `CGDisplayStream`.
 
+macOS 27 keeps a window hidden from screen sharing once it was hidden, unless Screening may record the screen. Turning protection off then moves Buddy to a new window whose protected display starts out visible. Measured without screen recording access, Buddy covered 65.5% of a capture of its window with protection off and none of it with protection on.
+
 Capture tests cannot prove visibility on the physical display. Check Buddy locally as well: open it, use **Keep open**, select **Notes**, and type. The automated native input test exercises mouse hit testing, text insertion, selection, hide/show and resizing; physical visibility is a separate manual check.
 
 On the tested macOS 27.0.1 system, the earlier AppKit-backed companion disappeared locally during Telegram calls. After switching to the dedicated layer-hosting view, the user confirmed that the labeled source preview stayed visible and accepted text in an open Telegram call. This is local physical verification, not a guarantee for every OS or meeting app. Native visible/ready flags and the fullscreen Space lifecycle test alone cannot establish physical visibility.

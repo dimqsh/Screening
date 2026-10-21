@@ -119,14 +119,17 @@ static void finalize(napi_env env, void *pointer, void *hint) {
 }
 static napi_value attach(napi_env env, napi_callback_info info) {
   if (![NSThread isMainThread]) return fail(env, "Presentation must run on the main thread.");
-  size_t argc = 1;
-  napi_value argv[1];
+  size_t argc = 2;
+  napi_value argv[2];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   void *bytes = nullptr;
   size_t length = 0;
-  if (argc != 1 || napi_get_buffer_info(env, argv[0], &bytes, &length) != napi_ok ||
+  if (argc < 1 || napi_get_buffer_info(env, argv[0], &bytes, &length) != napi_ok ||
       length != sizeof(void *))
     return fail(env, "Expected a native NSView handle.");
+  bool protectedContent = true;
+  if (argc == 2 && napi_get_value_bool(env, argv[1], &protectedContent) != napi_ok)
+    return fail(env, "Expected a protection flag.");
   NSView *view = (__bridge NSView *)*(void **)bytes;
   if (!view.window) return fail(env, "Buddy has no native window.");
   BuddyPresentation *p = [BuddyPresentation new];
@@ -146,11 +149,13 @@ static napi_value attach(napi_env env, napi_callback_info info) {
   p.parent = window;
   p.wantsVisible = window.visible;
   p.host.title = @"Screening — Buddy";
-  p.host.sharingType = NSWindowSharingNone;
+  // macOS 27 keeps a window hidden from screen sharing once it was hidden,
+  // unless Screening may record the screen; an unprotected Buddy starts visible.
+  p.host.sharingType = protectedContent ? NSWindowSharingNone : NSWindowSharingReadOnly;
   p.source = view;
   view.wantsLayer = YES;
   view.layer.opacity = 0;
-  replaceDisplay(p, YES);
+  replaceDisplay(p, protectedContent);
   // Visibility is driven explicitly by Buddy, including when the source
   // window was already occluded and no new occlusion notification arrives.
   [p.host orderOut:nil];

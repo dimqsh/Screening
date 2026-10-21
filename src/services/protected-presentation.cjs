@@ -1,8 +1,10 @@
 // The native companion draws protected pixels and passes all input through to
 // Buddy's original Chromium views. No input/IME emulation or disk frames.
-function protectPresentation(window, binary, onError) {
+// `protection` is where the display starts: macOS 27 may refuse to make a
+// protected window visible to screen sharing later.
+function protectPresentation(window, binary, onError, protection = true) {
   const native = require(binary);
-  const handle = native.attach(window.getNativeWindowHandle());
+  const handle = native.attach(window.getNativeWindowHandle(), protection);
   let stopped = false;
   let inFlight = null;
   let failed = false;

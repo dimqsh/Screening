@@ -396,8 +396,9 @@ function apply() {
 }
 // macOS 27 keeps a window hidden from screen sharing once it was hidden,
 // unless Screening may record the screen. A new window starts out visible, so
-// Buddy moves to one. The old window stays up until the new one has drawn.
-// The engine is never shown, so it keeps its window.
+// Buddy moves to one, with a new protected display that starts out visible
+// too. The old window stays up until the new one has drawn. The engine is
+// never shown, so it keeps its window.
 let retiring = [];
 // Buddy's page reports what it knows (see buddy.js), so a new window can start there.
 let buddyMemory = null;
@@ -525,11 +526,12 @@ function createBuddy(bounds, memory) {
   win.setIgnoreMouseEvents(true, { forward: true });
   if (process.platform === "darwin") {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    const presentation = require("./services/protected-presentation.cjs").protectPresentation(
-      win, helperPath("protected-presentation.node"), report,
+    presentations.set(
+      win,
+      require("./services/protected-presentation.cjs").protectPresentation(
+        win, helperPath("protected-presentation.node"), report, state.protection,
+      ),
     );
-    presentation.setProtection(state.protection);
-    presentations.set(win, presentation);
   }
   win.on("close", (event) => {
     if (!quitting) {

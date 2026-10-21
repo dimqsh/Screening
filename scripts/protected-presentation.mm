@@ -26,8 +26,15 @@
 @property(nonatomic) NSInteger videoFrames;
 @property(nonatomic) NSInteger droppedFrames;
 @property(nonatomic) NSInteger corruptedFrames;
+// Frames reuse IOSurface-backed buffers of the current size.
+@property(nonatomic) CVPixelBufferPoolRef pool;
+@property(nonatomic) uint32_t poolWidth;
+@property(nonatomic) uint32_t poolHeight;
 @end
 @implementation BuddyPresentation
+- (void)dealloc {
+  if (_pool) CVPixelBufferPoolRelease(_pool);
+}
 @end
 
 static napi_value fail(napi_env env, const char *message) {
@@ -45,6 +52,9 @@ static BuddyPresentation *presentation(napi_env env, napi_value value) {
   return (__bridge BuddyPresentation *)pointer;
 }
 static void suppressSource(BuddyPresentation *p) {
+  if (p.source.layer.opacity == 0 && CGRectEqualToRect(p.display.frame, p.view.bounds) &&
+      p.display.contentsScale == p.parent.backingScaleFactor)
+    return;
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
   p.source.layer.opacity = 0;
@@ -59,7 +69,7 @@ static void synchronize(BuddyPresentation *p) {
   suppressSource(p);
   if (!NSEqualRects(p.host.frame, p.parent.frame))
     [p.host setFrame:p.parent.frame display:YES];
-  p.host.level = p.parent.level + 1;
+  if (p.host.level != p.parent.level + 1) p.host.level = p.parent.level + 1;
   NSWindowCollectionBehavior behavior = p.parent.collectionBehavior;
   behavior &= ~(NSWindowCollectionBehaviorPrimary | NSWindowCollectionBehaviorAuxiliary |
       NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorMoveToActiveSpace);
@@ -196,10 +206,25 @@ static napi_value frame(napi_env env, napi_callback_info info) {
   if (p.display.sampleBufferRenderer.status == AVQueuedSampleBufferRenderingStatusFailed)
     [renderer flush];
   if (!renderer.readyForMoreMediaData) return nothing(env);
+  if (!p.pool || p.poolWidth != width || p.poolHeight != height) {
+    if (p.pool) CVPixelBufferPoolRelease(p.pool);
+    p.pool = nullptr;
+    NSDictionary *attributes = @{
+      (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+      (id)kCVPixelBufferWidthKey: @(width),
+      (id)kCVPixelBufferHeightKey: @(height),
+      (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+    };
+    CVPixelBufferPoolRef pool = nullptr;
+    if (CVPixelBufferPoolCreate(kCFAllocatorDefault, nullptr,
+            (__bridge CFDictionaryRef)attributes, &pool) != kCVReturnSuccess)
+      return fail(env, "Could not allocate Buddy's pixel buffers.");
+    p.pool = pool;
+    p.poolWidth = width;
+    p.poolHeight = height;
+  }
   CVPixelBufferRef pixels = nullptr;
-  NSDictionary *attributes = @{(id)kCVPixelBufferIOSurfacePropertiesKey: @{}};
-  CVReturn created = CVPixelBufferCreate(kCFAllocatorDefault, width, height,
-      kCVPixelFormatType_32BGRA, (__bridge CFDictionaryRef)attributes, &pixels);
+  CVReturn created = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, p.pool, &pixels);
   if (created != kCVReturnSuccess) return fail(env, "Could not allocate Buddy's pixel buffer.");
   CVBufferSetAttachment(pixels, kCVImageBufferAlphaChannelModeKey,
       kCVImageBufferAlphaChannelMode_PremultipliedAlpha, kCVAttachmentMode_ShouldPropagate);
@@ -373,6 +398,17 @@ static napi_value takeKeyboard(napi_env env, napi_callback_info info) {
   [p.parent makeKeyWindow];
   return nothing(env);
 }
+// Lets go of idle pooled buffers; the frame on screen stays alive.
+static napi_value trim(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  BuddyPresentation *p = argc == 1 ? presentation(env, argv[0]) : nil;
+  if (!p) return fail(env, "Invalid presentation.");
+  if (p.pool) CVPixelBufferPoolRelease(p.pool);
+  p.pool = nullptr;
+  return nothing(env);
+}
 static napi_value initialize(napi_env env, napi_value exports) {
   napi_property_descriptor methods[] = {
     {"attach", nullptr, attach, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -384,6 +420,7 @@ static napi_value initialize(napi_env env, napi_value exports) {
     {"close", nullptr, close, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"releaseKeyboard", nullptr, releaseKeyboard, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"takeKeyboard", nullptr, takeKeyboard, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"trim", nullptr, trim, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(env, exports, sizeof(methods) / sizeof(methods[0]), methods);
   return exports;

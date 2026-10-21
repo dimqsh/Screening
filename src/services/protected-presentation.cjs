@@ -15,6 +15,8 @@ function protectPresentation(window, binary, onError) {
   // Before Buddy's first paint a capture comes back empty; that is not a
   // display failure. Retry for up to two seconds before treating it as one.
   let firstFrameRetries = 40;
+  // Pooled frame buffers are let go once Buddy has been still for a moment.
+  let trimTimer = null;
 
   function fail(error) {
     if (stopped || failed) return;
@@ -29,6 +31,10 @@ function protectPresentation(window, binary, onError) {
     const { width, height } = image.getSize();
     native.frame(handle, image.toBitmap(), width, height);
     presentedAt = performance.now();
+    clearTimeout(trimTimer);
+    trimTimer = setTimeout(() => {
+      if (!stopped && !failed) native.trim(handle);
+    }, 1500);
     const status = native.status(handle);
     if (process.env.SCREENING_DISPLAY_DIAGNOSTICS === "1" && ++diagnosticFrames % 60 === 0) {
       const pixels = image.toBitmap();
@@ -107,6 +113,7 @@ function protectPresentation(window, binary, onError) {
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    clearTimeout(trimTimer);
     unsubscribe();
     native.close(handle);
   };

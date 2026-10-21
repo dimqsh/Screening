@@ -8,7 +8,11 @@ if (process.platform !== "darwin") {
   process.exit(0);
 }
 const root = path.resolve(__dirname, "..");
-const arch = process.arch === "arm64" ? "arm64" : "x86_64";
+// --arch x64 or --arch arm64 builds for that Mac; the default is this one.
+const requested = process.argv[process.argv.indexOf("--arch") + 1];
+const target = process.argv.includes("--arch") ? requested : process.arch;
+if (!["arm64", "x64"].includes(target)) throw new Error(`Unsupported --arch ${target}`);
+const arch = target === "arm64" ? "arm64" : "x86_64";
 fs.mkdirSync(path.join(root, "bin"), { recursive: true });
 // Core Audio process taps arrived in macOS 14.2; the rest run on 14.0.
 const helpers = { "capture-sck": "14.0", "audio-sck": "14.0", "audio-tap": "14.2", "notch-info": "14.0" };

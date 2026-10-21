@@ -2,7 +2,9 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
-function binaryPath() {
+// The packaged runtime, or the npm one for this machine. Packaging for the
+// other Mac architecture passes that arch (scripts/prepare-runtime.cjs).
+function binaryPath(arch = process.arch) {
   if (
     process.resourcesPath &&
     fs.existsSync(
@@ -21,8 +23,8 @@ function binaryPath() {
   }
   const suffix =
     process.platform === "win32"
-      ? `win32-${process.arch}`
-      : `${process.platform}-${process.arch}`;
+      ? `win32-${arch}`
+      : `${process.platform}-${arch}`;
   const triple = {
     "darwin-arm64": "aarch64-apple-darwin",
     "darwin-x64": "x86_64-apple-darwin",

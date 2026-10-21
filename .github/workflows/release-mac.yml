@@ -9,8 +9,15 @@ permissions:
   contents: write
 jobs:
   macos:
-    runs-on: macos-15
-    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
@@ -26,13 +33,26 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: node scripts/prepare-speech-test.cjs
-      - run: npm run package:mac
+      - name: Restore ONNX Runtime for Intel Macs
+        if: matrix.arch == 'x64'
+        id: ort
+        uses: actions/cache@v4
+        with:
+          path: build/onnxruntime-darwin-x64
+          key: onnxruntime-darwin-x64-${{ hashFiles('scripts/build-onnxruntime.cjs', 'package-lock.json') }}
+      - name: Build ONNX Runtime for Intel Macs
+        if: matrix.arch == 'x64' && steps.ort.outputs.cache-hit != 'true'
+        run: node scripts/build-onnxruntime.cjs --build
+      - name: Install ONNX Runtime for Intel Macs
+        if: matrix.arch == 'x64'
+        run: node scripts/build-onnxruntime.cjs --install
+      - run: npm run ${{ matrix.arch == 'x64' && 'package:mac:x64' || 'package:mac' }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: Verify the DMG app and local Whisper
         run: |
           set -e
-          dmg=$(find dist -maxdepth 1 -name '*mac-arm64.dmg' -print -quit)
+          dmg=$(find dist -maxdepth 1 -name "*mac-${{ matrix.arch }}.dmg" -print -quit)
           hdiutil verify "$dmg"
           mkdir -p build/dmg-check
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$PWD/build/dmg-check"
@@ -47,7 +67,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macOS-validation
+          name: macOS-validation-${{ matrix.arch }}
           path: |
             validation/macos-ci/
             build/macos-verify.log
@@ -58,5 +78,5 @@ jobs:
         run: |
           set -e
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          shasum -a 256 dist/*mac-arm64.dmg
-          gh release upload "$RELEASE_TAG" dist/*mac-arm64.dmg --clobber
+          shasum -a 256 dist/*mac-${{ matrix.arch }}.dmg
+          gh release upload "$RELEASE_TAG" dist/*mac-${{ matrix.arch }}.dmg --clobber

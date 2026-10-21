@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs or updates Screening on an Apple silicon Mac:
+# Installs or updates Screening on a Mac, Apple silicon or Intel:
 #   curl -fsSL https://raw.githubusercontent.com/dimqsh/Screening/main/install.sh | bash
 set -euo pipefail
 
@@ -10,14 +10,16 @@ if [ "$(uname -s)" != "Darwin" ]; then
   echo "This installer is for macOS. On Windows, run the .exe from $RELEASES"
   exit 1
 fi
-if [ "$(uname -m)" != "arm64" ]; then
-  echo "Screening needs a Mac with Apple silicon (M1 or newer)."
-  exit 1
+# A shell under Rosetta reports x86_64 on Apple silicon; ask the hardware.
+if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
+  arch=arm64
+else
+  arch=x64
 fi
 
-echo "Finding the newest Screening…"
+echo "Finding the newest Screening for $arch…"
 url=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=20" |
-  grep -o '"browser_download_url": *"[^"]*mac-arm64\.dmg"' |
+  grep -o "\"browser_download_url\": *\"[^\"]*mac-$arch\\.dmg\"" |
   head -n 1 | sed -E 's/.*"(https[^"]+)"$/\1/')
 if [ -z "$url" ]; then
   echo "No Mac download found. See $RELEASES"

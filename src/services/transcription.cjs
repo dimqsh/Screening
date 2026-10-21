@@ -199,7 +199,10 @@ class Transcription {
       throw new Error("Native audio requires macOS");
     if (!this.state.ready) throw new Error("Load Whisper first.");
     if (this.native) throw new Error("Recording already started.");
-    let data = Buffer.alloc(0),
+    // The helper writes a small block per audio device cycle. Blocks are kept
+    // as they come and joined once per 8 s segment, not on every block.
+    let parts = [],
+      size = 0,
       diagnostic = "",
       ready = false,
       lastLevelAt = 0;
@@ -231,8 +234,11 @@ class Transcription {
           );
           lastLevelAt = Date.now();
         }
-        data = Buffer.concat([data, chunk]);
+        parts.push(chunk);
+        size += chunk.length;
         const bytes = 16000 * 8 * 4;
+        if (size < bytes) return;
+        let data = Buffer.concat(parts, size);
         while (data.length >= bytes) {
           const segment = data.subarray(0, bytes);
           data = data.subarray(bytes);
@@ -241,6 +247,8 @@ class Transcription {
             language,
           ).catch((e) => this.update({ error: e.message }));
         }
+        parts = data.length ? [data] : [];
+        size = data.length;
       });
       child.stderr.on("data", (chunk) => {
         diagnostic = (diagnostic + chunk).slice(-4000);
@@ -260,6 +268,7 @@ class Transcription {
       child.once("close", (code) => {
         clearTimeout(timer);
         this.native = null;
+        const data = Buffer.concat(parts, size);
         if (data.length >= 16000 * 4) {
           const copy = new Uint8Array(
             data.subarray(0, data.length - (data.length % 4)),

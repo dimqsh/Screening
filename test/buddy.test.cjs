@@ -706,3 +706,40 @@ test("call audio uses a tap from macOS 14.2 and snapshots the picker from macOS 
   assert.equal(hasSystemPicker("darwin", "24.0.0"), true);
   assert.equal(hasSystemPicker("win32", "10.0.26100"), false);
 });
+test("call audio is cut into 8 s segments however the helper splits it", { skip: process.platform !== "darwin" }, async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  // A stand-in for audio-tap: 9 s of numbered samples in 4 KB blocks.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "screening-tap-"));
+  const helper = path.join(dir, "audio-tap");
+  fs.writeFileSync(helper, `#!${process.execPath}
+process.stderr.write("SCREENING_AUDIO_READY\\n");
+const all = new Float32Array(16000 * 9).map((_, i) => i);
+const bytes = Buffer.from(all.buffer);
+let offset = 0;
+const next = () => {
+  if (offset >= bytes.length) return;
+  process.stdout.write(bytes.subarray(offset, offset + 4096), next);
+  offset += 4096;
+};
+next();
+`, { mode: 0o755 });
+  const stt = new Transcription("/tmp/none", () => {}, () => {}, () => {}, SPEECH_MODELS.fast, {
+    createWorker: fakeWorkers().create,
+  });
+  stt.markDownloaded();
+  const segments = [];
+  stt.transcribe = (samples) => {
+    segments.push([samples.length, samples[0], samples[samples.length - 1]]);
+    return Promise.resolve("");
+  };
+  await stt.startNative(helper, "en");
+  while (stt.native) await wait(10);
+  assert.deepEqual(segments, [
+    [128000, 0, 127999],
+    [16000, 128000, 143999],
+  ]);
+  fs.rmSync(dir, { recursive: true, force: true });
+  stt.close();
+});

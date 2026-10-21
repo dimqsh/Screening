@@ -9,6 +9,7 @@ const {
   desktopCapturer,
 } = require("electron");
 const { FLOAT } = require("./services/notch.cjs");
+const { speechReady } = require("./buddy-model.js");
 
 const QUESTION = "Tell me about a time you disagreed with your manager.";
 const STAR_ANSWER =
@@ -19,9 +20,9 @@ const CODE_ANSWER =
   "Use a hash set and one pass, so it runs in O(n).\n\n```python\ndef pairs(nums, target):\n    seen, out = set(), []\n    for n in nums:\n        if target - n in seen:\n            out.append((target - n, n))\n        seen.add(n)\n    return out\n```\n\nFor `[4, 8, 15, 16, 23, 42]` and 31 this returns **(8, 23)** and **(15, 16)**.";
 
 module.exports = async function verify(ctx) {
+  let { buddy } = ctx;
   const {
     app,
-    buddy,
     engine,
     tray,
     interview,
@@ -37,6 +38,7 @@ module.exports = async function verify(ctx) {
     runCapture,
     permission,
     setDock,
+    replaceBuddy,
     access,
     delay,
   } = ctx;
@@ -44,12 +46,14 @@ module.exports = async function verify(ctx) {
   await fs.mkdir(artifactDir, { recursive: true });
   // Any script error in a window fails verification, even if every check passes.
   const scriptErrors = [];
-  for (const [name, win] of [["Buddy", buddy], ["engine", engine]])
+  const watch = (name, win) =>
     win.webContents.on("console-message", (event, legacyLevel, legacyMessage) => {
       const level = event.level ?? legacyLevel;
       if (level === "error" || level === 3)
         scriptErrors.push(`${name}: ${event.message ?? legacyMessage}`);
     });
+  watch("Buddy", buddy);
+  watch("engine", engine);
   const checks = [];
   function check(name, fn) {
     fn();
@@ -83,9 +87,13 @@ module.exports = async function verify(ctx) {
         compact: island.classList.contains("compact"),
         accessStep: !document.getElementById("step-access").hidden,
         accessDone: document.getElementById("step-access").classList.contains("done"),
+        speechDone: document.getElementById("step-model").classList.contains("done"),
+        speechText: document.getElementById("model-text").textContent,
+        speechOptional: !document.getElementById("model").classList.contains("primary"),
         manual: island.dataset.hover === "true" || island.dataset.pinned === "true",
         view: document.querySelector(".view.active")?.id,
         answer: document.getElementById("answer").textContent,
+        live: document.querySelector("#transcript .line.live p")?.textContent || "",
         turns: document.getElementById("turn-count").textContent }; })()`);
 
   // Architecture
@@ -132,10 +140,22 @@ module.exports = async function verify(ctx) {
   });
   check("Protection can be disabled and restored", () => {
     change("protection", false);
-    assert.equal(buddy.isContentProtected(), false);
+    assert.equal(ctx.buddy.isContentProtected(), false);
     change("protection", true);
-    assert.equal(buddy.isContentProtected(), true);
+    assert.equal(ctx.buddy.isContentProtected(), true);
   });
+  // Where macOS kept the old window hidden, Buddy now lives in a new one.
+  if (ctx.buddy !== buddy) {
+    buddy = ctx.buddy;
+    watch("Buddy", buddy);
+    await until(
+      () =>
+        BrowserWindow.getAllWindows().length === 2 &&
+        !buddy.webContents.isLoading(),
+      10000,
+      "The old Buddy window did not close",
+    );
+  }
   check("Input validation rejects unknown settings and oversized notes", () => {
     assert.throws(() => change("arbitrary", true));
     assert.throws(() => change("protection", "yes"));
@@ -177,15 +197,20 @@ module.exports = async function verify(ctx) {
     const saved = {
       ready: whisper.ready,
       connected: ai.connected,
+      partial: whisper.partial,
+      engine: whisper.engine,
       messages: interview.state.messages,
       transcript: interview.state.transcript,
       recording: interview.state.recording,
       startedAt: interview.state.startedAt,
       source: interview.state.source,
+      settings: interview.state.settings,
     };
     whisper.ready = patch.ready ?? true;
     ai.connected = patch.connected ?? true;
-    const { ready, connected, ...rest } = patch;
+    whisper.partial = patch.partial ?? "";
+    whisper.engine = patch.partial ? "apple" : whisper.engine;
+    const { ready, connected, partial, ...rest } = patch;
     Object.assign(interview.state, rest);
     publish();
     await delay(250);
@@ -202,7 +227,9 @@ module.exports = async function verify(ctx) {
     } finally {
       whisper.ready = saved.ready;
       ai.connected = saved.connected;
-      const { ready: r, connected: c, ...others } = saved;
+      whisper.partial = saved.partial;
+      whisper.engine = saved.engine;
+      const { ready: r, connected: c, partial: p, engine: e, ...others } = saved;
       Object.assign(interview.state, others);
       publish();
       await delay(400);
@@ -244,6 +271,41 @@ module.exports = async function verify(ctx) {
         firstRun.microphone === "granted" && firstRun.audio === "granted",
       );
   });
+  // On macOS 26, Apple's live transcription can stand in for Whisper.
+  const appleOnly = speechReady({
+    ...interview.state,
+    whisper: { ...interview.state.whisper, ready: false },
+  });
+  check(
+    appleOnly
+      ? "Apple's live transcription finishes the speech step; Whisper is optional"
+      : "Setup offers the speech model download",
+    () => {
+      assert.equal(setup.speechDone, appleOnly);
+      assert.equal(setup.speechOptional, appleOnly);
+      assert.match(setup.speechText, appleOnly ? /Apple .* live.*optional/ : /download/i);
+    },
+  );
+  if (appleOnly) {
+    const whisperChoice = await scene(
+      "setup-whisper",
+      {
+        ready: false,
+        connected: false,
+        messages: [],
+        transcript: [],
+        settings: { ...interview.state.settings, speechEngine: "whisper" },
+      },
+      pin,
+    );
+    await js(pin);
+    check("Choosing Whisper asks for its download again", () => {
+      assert.equal(whisperChoice.mode, "setup");
+      assert.equal(whisperChoice.speechDone, false);
+      assert.equal(whisperChoice.speechOptional, false);
+      assert.match(whisperChoice.speechText, /download/i);
+    });
+  }
   await click("dismiss");
   const idle = await scene("idle", { messages: [], transcript: [], recording: false });
   check("Idle Buddy stays collapsed at the notch", () => {
@@ -280,12 +342,17 @@ module.exports = async function verify(ctx) {
       source: "system",
       startedAt: Date.now() - 83000,
       transcript: heard,
+      // Apple's words for the sentence still being spoken.
+      partial: "And how would you scale it to ten times the traffic",
     },
     `${pin}; document.querySelector('[data-tab="transcript"]').click()`,
   );
   await js(`${pin}; document.querySelector('[data-tab="answer"]').click()`);
   check("The transcript tab shows what was heard", () =>
     assert.equal(transcriptView.view, "view-transcript"),
+  );
+  check("Live words show under the transcript while someone speaks", () =>
+    assert.equal(transcriptView.live, "And how would you scale it to ten times the traffic"),
   );
   const thinking = await scene("thinking", {
     transcript: heard,
@@ -344,6 +411,53 @@ module.exports = async function verify(ctx) {
   check("Buddy closes when the answer is gone", () =>
     assert.equal(after.open, after.manual),
   );
+
+  // macOS 27 moves Buddy to a new window to turn protection off. The new
+  // window must not reopen an answer that was closed, in front of the call.
+  // Answers show only after setup, so the scene stands in for a ready one.
+  const savedMessages = interview.state.messages;
+  const savedReady = interview.state.whisper.ready;
+  const savedConnected = interview.state.ai.connected;
+  interview.state.whisper.ready = true;
+  interview.state.ai.connected = true;
+  interview.state.messages = [
+    { id: 9301, role: "user", text: QUESTION },
+    { id: 9302, role: "assistant", status: "done", text: STAR_ANSWER },
+  ];
+  publish();
+  let opened = await probe();
+  for (let i = 0; i < 50 && opened.mode !== "answer"; i++) {
+    await delay(100);
+    opened = await probe();
+  }
+  await click("dismiss");
+  await delay(400);
+  const closedBefore = await probe();
+  const oldWindow = buddy;
+  replaceBuddy();
+  buddy = ctx.buddy;
+  watch("Buddy", buddy);
+  await until(
+    () => BrowserWindow.getAllWindows().length === 2 && !buddy.webContents.isLoading(),
+    10000,
+    "The old Buddy window did not close",
+  );
+  await delay(500);
+  const reopened = await probe();
+  interview.state.messages = savedMessages;
+  interview.state.whisper.ready = savedReady;
+  interview.state.ai.connected = savedConnected;
+  publish();
+  await delay(300);
+  check("A new Buddy window keeps a closed answer closed", () => {
+    assert.equal(opened.mode, "answer");
+    assert.notEqual(closedBefore.mode, "answer");
+    assert.notEqual(buddy, oldWindow);
+    assert.equal(oldWindow.isDestroyed(), true);
+    assert.equal(closedBefore.open, closedBefore.manual);
+    assert.equal(reopened.open, reopened.manual);
+    assert.notEqual(reopened.mode, "answer");
+  });
 
   // Floating: Buddy leaves the notch for a small window, then snaps back.
   await setDock("float");
@@ -478,20 +592,51 @@ module.exports = async function verify(ctx) {
     }
     assert.equal(interview.state.whisper.ready, true);
     const raw = await fs.readFile(process.env.CAPTURE_LAB_TEST_AUDIO);
-    await interview.request("recording", true);
-    // Audio is queued for Whisper; the words arrive in the transcript.
-    await interview.audio(
-      raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
-    );
-    await until(
-      () => interview.state.transcript.some((t) => /country/i.test(t.text)),
-      60000,
-      "Whisper did not transcribe the sample",
-    );
-    await interview.request("stop");
-    check("Real Whisper audio reaches the transcript", () =>
-      assert.ok(interview.state.transcript.length),
-    );
+    // Apple's live transcription where this Mac has it, then Whisper, which
+    // every Mac and Windows PC can use.
+    const savedEngine = interview.state.settings.speechEngine;
+    const engines = interview.state.whisper.live?.installed ? ["apple", "whisper"] : ["whisper"];
+    const downloaded = interview.state.whisper.ready;
+    for (const engine of engines) {
+      await interview.request("setting", { key: "speechEngine", value: engine });
+      await interview.request("clear");
+      // Apple needs no Whisper model: listening starts as if none were on disk.
+      if (engine === "apple") interview.state.whisper.ready = false;
+      try {
+        await interview.request("recording", true);
+      } finally {
+        interview.state.whisper.ready = downloaded;
+      }
+      const used = interview.state.whisper.engine;
+      // The whole sample arrives at once; the words reach the transcript.
+      await interview.audio(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+      let partial = "";
+      await until(
+        () => {
+          partial ||= interview.state.whisper.partial;
+          return interview.state.transcript.some((t) => /country/i.test(t.text));
+        },
+        60000,
+        `${engine} did not transcribe the sample`,
+      );
+      await interview.request("stop");
+      if (engine === "apple") {
+        check("Apple's live transcription listens without Whisper and reaches the transcript", () => {
+          assert.equal(used, "apple");
+          assert.match(interview.state.transcript.map((t) => t.text).join(" "), /fellow Americans.*country/i);
+        });
+        check("Apple's words show before they are final", () => assert.match(partial, /\w/));
+      } else
+        check("Real Whisper audio reaches the transcript", () => {
+          assert.equal(used, "whisper");
+          assert.ok(interview.state.transcript.length);
+        });
+      check(`Stopping ${engine === "apple" ? "Apple's transcription" : "Whisper"} clears the live words`, () => {
+        assert.equal(interview.state.whisper.partial, "");
+        assert.equal(interview.state.whisper.engine, null);
+      });
+    }
+    await interview.request("setting", { key: "speechEngine", value: savedEngine });
     await delay(300);
     const rendered = await js(`document.getElementById("transcript").textContent`);
     check("The transcript reaches Buddy", () => assert.match(rendered, /country/i));
@@ -548,6 +693,16 @@ module.exports = async function verify(ctx) {
       setHidden(false);
       await delay(800);
       check("Audio level reaches Buddy", () => assert.ok(audioControl.peak > 0.02));
+      if (interview.state.whisper.engine === "apple") {
+        let words = "";
+        for (let i = 0; i < 40 && !words; i++) {
+          words = await js(`document.querySelector("#transcript .line.live p")?.textContent || ""`);
+          if (!words) await delay(100);
+        }
+        check("Buddy shows the microphone's words while they are spoken", () =>
+          assert.match(words, /\w/),
+        );
+      }
       await shot("buddy-listening-live.png");
       const live = await js(
         `document.querySelector('[data-source="microphone"]').classList.contains("live")`,
@@ -560,7 +715,7 @@ module.exports = async function verify(ctx) {
         .slice(previousCount)
         .map((item) => item.text)
         .join(" ");
-      check("Stopping flushes the last seconds through real Whisper", () =>
+      check("Stopping keeps the last words", () =>
         assert.match(tail, /fellow|Americans|country/i),
       );
       await delay(300);
@@ -683,8 +838,9 @@ module.exports = async function verify(ctx) {
   if (has("--protected-test")) await require("./verify-protected.cjs")(ctx);
   if (has("--capture-test")) {
     captureResults.push(await runCapture("electron"));
-    if (process.platform === "darwin") captureResults.push(await runCapture("sck"));
-    if (process.platform === "darwin") captureResults.push(await runCapture("cgdisplay"));
+    if (process.platform === "darwin")
+      for (const capturePath of ["sck", "legacy"])
+        captureResults.push(await runCapture(capturePath));
     // The menu bar as screen capture sees it: the icon is there, Buddy is not.
     const display = screen.getPrimaryDisplay();
     if (process.platform === "darwin") {

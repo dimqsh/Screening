@@ -1,6 +1,7 @@
 // Buddy: the whole app, driven by the shared interview snapshot.
 const api = window.captureLab;
-const { deriveBuddy, listTurns, buddyMood, buddyActivity } = window.buddyModel;
+const { deriveBuddy, listTurns, buddyMood, buddyActivity, speechReady, speechStep } =
+  window.buddyModel;
 const $ = (id) => document.getElementById(id);
 const island = $("island");
 const panel = $("panel");
@@ -47,6 +48,41 @@ let stick = true;
 let answerKey = "";
 let answerTurnId = null;
 let transcriptKey = "";
+// A replacement window (see replaceBuddy in main.cjs) starts where this one
+// was, so an answer you closed stays closed.
+let memoryKey = "";
+let memoryTimer = null;
+input.addEventListener("input", () => {
+  clearTimeout(memoryTimer);
+  memoryTimer = setTimeout(remember, 400);
+});
+function remember() {
+  const memory = {
+    dismissedId,
+    seenTurn,
+    mutedTurn,
+    pinned,
+    tab,
+    draft: input.value.slice(0, 16000),
+    autoUntil: autoUntil === Infinity ? -1 : autoUntil,
+  };
+  const key = JSON.stringify(memory);
+  if (key === memoryKey) return;
+  memoryKey = key;
+  api.remember(memory);
+}
+try {
+  const saved = new URLSearchParams(location.hash.slice(1)).get("memory");
+  if (saved) {
+    const memory = JSON.parse(saved);
+    ({ dismissedId, seenTurn, mutedTurn, pinned } = memory);
+    if (["answer", "transcript", "notes", "you"].includes(memory.tab)) tab = memory.tab;
+    if (typeof memory.draft === "string") input.value = memory.draft.slice(0, 16000);
+    autoUntil = memory.autoUntil < 0 ? Infinity : Number(memory.autoUntil) || 0;
+  }
+} catch {
+  /* A fresh start. */
+}
 let lastIssue = null;
 let contextDirty = false;
 let notesTimer = null;
@@ -271,37 +307,67 @@ function renderAnswerView() {
   prop($("copy"), "disabled", Boolean(!turn?.answer));
 }
 
+function transcriptRow(time, text) {
+  const row = document.createElement("div");
+  row.className = "line";
+  const stamp = document.createElement("time");
+  stamp.textContent = new Date(time).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const words = document.createElement("p");
+  words.textContent = text;
+  row.append(stamp, words);
+  return row;
+}
+
+// Final lines, then Apple's words so far, which change while someone speaks.
 function renderTranscript() {
-  const transcript = current.interview.transcript || [];
-  const key = JSON.stringify(transcript.map((item) => item.id));
-  if (key === transcriptKey) return;
-  transcriptKey = key;
+  const interview = current.interview;
+  const transcript = interview.transcript || [];
+  const partial = interview.recording ? interview.whisper?.partial || "" : "";
   const target = $("transcript");
-  if (!transcript.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty-text";
-    empty.textContent = current.interview.recording
-      ? "Listening. The first line appears in a few seconds."
-      : "Nothing heard yet. Press Call audio or Microphone to start.";
-    target.replaceChildren(empty);
-    return;
+  const following = target.scrollHeight - target.scrollTop - target.clientHeight < 32;
+  const key = JSON.stringify(transcript.map((item) => item.id));
+  if (key !== transcriptKey) {
+    transcriptKey = key;
+    target.replaceChildren(...transcript.map((item) => transcriptRow(item.time, item.text)));
   }
-  target.replaceChildren(
-    ...transcript.map((item) => {
-      const row = document.createElement("div");
-      row.className = "line";
-      const time = document.createElement("time");
-      time.textContent = new Date(item.time).toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      });
-      const text = document.createElement("p");
-      text.textContent = item.text;
-      row.append(time, text);
-      return row;
-    }),
+  let live = target.querySelector(".line.live");
+  if (partial && !live) {
+    live = transcriptRow(Date.now(), "");
+    live.classList.add("live");
+    target.append(live);
+  }
+  if (live && partial) setText(live.querySelector("p"), partial);
+  else live?.remove();
+  let empty = target.querySelector(".empty-text");
+  if (!transcript.length && !partial) {
+    if (!empty) {
+      empty = document.createElement("p");
+      empty.className = "empty-text";
+      target.append(empty);
+    }
+    setText(
+      empty,
+      !interview.recording
+        ? "Nothing heard yet. Press Call audio or Microphone to start."
+        : interview.whisper?.engine === "apple"
+          ? "Listening. Words appear as they are spoken."
+          : "Listening. The first line appears in a few seconds.",
+    );
+  } else empty?.remove();
+  if (following) target.scrollTop = target.scrollHeight;
+  const whisper = interview.whisper || {};
+  const wordByWord = interview.recording
+    ? whisper.engine === "apple"
+    : interview.settings?.speechEngine === "apple" && Boolean(whisper.live?.installed);
+  setText(
+    $("transcript-hint"),
+    wordByWord
+      ? "Words appear as they are spoken. Answers use finished sentences."
+      : "New lines arrive after each pause.",
   );
-  target.scrollTop = target.scrollHeight;
 }
 
 function downloadSize() {
@@ -313,9 +379,12 @@ function downloadSize() {
 function renderSetup() {
   const whisper = current.interview.whisper;
   const ai = current.interview.ai;
-  $("step-model").classList.toggle("done", Boolean(whisper.ready));
+  const speech = speechStep(current.interview, downloadSize());
+  $("step-model").classList.toggle("done", speech.done);
   $("step-account").classList.toggle("done", Boolean(ai.connected));
   show($("model"), !whisper.ready);
+  // With Apple's live transcription, Whisper is an extra.
+  $("model").classList.toggle("primary", !speech.optional);
   prop($("model"), "disabled", Boolean(whisper.status === "loading"));
   setText(
     $("model"),
@@ -326,12 +395,7 @@ function renderSetup() {
   progress.classList.toggle("indeterminate", !Number.isFinite(whisper.progress));
   if (Number.isFinite(whisper.progress))
     setVar(progress, "--progress", `${whisper.progress}%`);
-  setText(
-    $("model-text"),
-    whisper.ready
-      ? "Ready. Speech stays on this computer."
-      : `Turns the call into text on this computer. One${downloadSize()} download.`,
-  );
+  setText($("model-text"), speech.text);
   show($("login"), !ai.connected);
   prop($("login"), "disabled", Boolean(ai.status === "signing-in"));
   setText($("login"), ai.status === "signing-in" ? "Waiting…" : "Sign in");
@@ -422,7 +486,9 @@ function render(snapshot) {
   for (const row of buddyActivity(view)) {
     const item = document.querySelector(`#activity [data-step="${row.key}"]`);
     item.classList.toggle("active", row.active);
-    setText(item.querySelector("span"), row.text);
+    // Live words keep their newest end in view; the isolate keeps them left to right.
+    item.classList.toggle("tail", Boolean(row.tail));
+    setText(item.querySelector("span"), row.tail ? `\u2066${row.text}\u2069` : row.text);
   }
 
   // Listening chips: each starts its own source; the live one stops it.
@@ -435,7 +501,7 @@ function render(snapshot) {
       "disabled",
       Boolean(
         audioBusy ||
-          !interview.whisper.ready ||
+          !speechReady(interview) ||
           (interview.recording && !live),
       ),
     );
@@ -499,6 +565,7 @@ function render(snapshot) {
   if (flashing) setText($("toast"), flash.text);
 
   layout();
+  remember();
 }
 
 let levelNow = -1;

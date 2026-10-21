@@ -22,7 +22,7 @@ const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
 const notchGeometry = require("./services/notch.cjs");
 const { trayMenu, KEYS } = require("./tray-menu.cjs");
-const { formatElapsed } = require("./buddy-model.js");
+const { formatElapsed, speechReady } = require("./buddy-model.js");
 const { speechModel } = require("./services/speech-model.cjs");
 const { lightSnapshot, engineSnapshot } = require("./services/snapshot.cjs");
 const { hasAudioTap, hasSystemPicker } = require("./services/macos.cjs");
@@ -43,7 +43,6 @@ if (verification)
 
 // Buddy is the only visible window. The engine is a hidden audio host.
 let buddy,
-  buddyPresentation,
   engine,
   tray,
   interview,
@@ -71,6 +70,9 @@ const state = {
 };
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const alive = (win) => win && !win.isDestroyed();
+// On macOS each Buddy window draws through its own protected display.
+const presentations = new WeakMap();
+const buddyPresentation = () => presentations.get(buddy);
 const permission = () =>
   process.platform === "darwin"
     ? systemPreferences.getMediaAccessStatus("screen")
@@ -217,8 +219,9 @@ function helperPath(name) {
     : path.join(__dirname, "..", "bin", name);
 }
 function syncBuddy() {
-  if (!alive(buddy)) return;
-  if (buddyPresentation?.failed) {
+  // A new Buddy window stays hidden until it has drawn; see replaceBuddy.
+  if (!alive(buddy) || retiring.length) return;
+  if (buddyPresentation()?.failed) {
     buddy.hide();
     return;
   }
@@ -230,7 +233,7 @@ function syncBuddy() {
     // Return with clicks passing through, whatever the pointer was doing.
     buddy.setIgnoreMouseEvents(true, { forward: true });
   }
-  buddyPresentation?.sync(show);
+  buddyPresentation()?.sync(show);
 }
 // The camera housing of a display never moves, so the helper runs once per
 // display: a new display or resolution gets its own run. Callers share one
@@ -342,7 +345,7 @@ function takeKeyboard() {
   keyboard.focusableOnTake = buddy.isFocusable();
   // makeKeyAndOrderFront in Electron's panel focus path can stall subsequent
   // resized capturePage frames. The protected companion already owns stacking.
-  if (buddyPresentation) buddyPresentation.takeKeyboard();
+  if (buddyPresentation()) buddyPresentation().takeKeyboard();
   else {
     buddy.focus();
     buddy.webContents.focus();
@@ -355,7 +358,7 @@ function releaseKeyboard() {
   buddy.setFocusable(false);
   // Release key status without disturbing the protected companion's display.
   if (focused && buddy.isVisible()) {
-    if (buddyPresentation) buddyPresentation.releaseKeyboard();
+    if (buddyPresentation()) buddyPresentation().releaseKeyboard();
     else {
       buddy.hide();
       buddy.showInactive();
@@ -381,8 +384,56 @@ function change(key, value) {
 function apply() {
   for (const win of [buddy, engine])
     if (alive(win)) win.setContentProtection(state.protection);
-  buddyPresentation?.setProtection(state.protection);
+  buddyPresentation()?.setProtection(state.protection);
+  if (
+    process.platform === "darwin" &&
+    !state.protection &&
+    alive(buddy) &&
+    buddy.isContentProtected()
+  )
+    replaceBuddy();
   publish();
+}
+// macOS 27 keeps a window hidden from screen sharing once it was hidden,
+// unless Screening may record the screen. A new window starts out visible, so
+// Buddy moves to one. The old window stays up until the new one has drawn.
+// The engine is never shown, so it keeps its window.
+let retiring = [];
+// Buddy's page reports what it knows (see buddy.js), so a new window can start there.
+let buddyMemory = null;
+function replaceBuddy() {
+  if (retiring.length) return;
+  endDrag(false);
+  const old = buddy;
+  retiring.push(old);
+  const next = (buddy = createBuddy(old.getBounds(), buddyMemory));
+  let settled = false;
+  const settle = (ok) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    retiring = [];
+    if (ok || !alive(old)) {
+      if (alive(old)) old.destroy();
+    } else {
+      // The new page never drew: keep the old window, still protected.
+      buddy = old;
+      if (alive(next)) next.destroy();
+    }
+    syncBuddy();
+    publish();
+  };
+  const timer = setTimeout(() => settle(false), 8000);
+  // On macOS the page has drawn once its protected display has a frame.
+  Promise.all([
+    new Promise((resolve) => next.once("ready-to-show", resolve)),
+    presentations.get(next)?.ready,
+  ]).then(
+    () => settle(true),
+    () => settle(false),
+  );
+  next.webContents.once("did-fail-load", () => settle(false));
+  next.webContents.once("render-process-gone", () => settle(false));
 }
 
 async function audio(op, kind) {
@@ -391,7 +442,7 @@ async function audio(op, kind) {
   if (op === "start") {
     if (!["microphone", "system"].includes(kind))
       throw new Error("Invalid audio source");
-    if (!interview.state.whisper.ready)
+    if (!speechReady(interview.state))
       throw new Error("Download the speech model before listening.");
     if (interview.state.recording) throw new Error("Already listening.");
     audioControl.peak = 0;
@@ -419,7 +470,7 @@ const toggleListening = () =>
     ? audio("stop")
     : audio("start", interview.state.settings.source);
 
-function create(file, options) {
+function create(file, options, load) {
   const win = new BrowserWindow({
     show: false,
     // macOS ignores window icons; decoding this 1254 px PNG still took 6-8 ms per window.
@@ -439,7 +490,57 @@ function create(file, options) {
   win.setContentProtection(state.protection);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
-  win.loadFile(path.join(__dirname, file));
+  win.loadFile(path.join(__dirname, file), load);
+  return win;
+}
+// `memory` is what the previous Buddy page knew (dismissed answer, pin, tab,
+// draft), so a replacement window does not reopen an answer you closed.
+function createBuddy(bounds, memory) {
+  const hash = memory ? `memory=${encodeURIComponent(JSON.stringify(memory))}` : undefined;
+  buddyMemory = null;
+  const win = create("buddy.html", {
+    title: "Screening — Buddy",
+    ...bounds,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    roundedCorners: false,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    // The meeting app keeps keyboard focus until a Buddy text field is used.
+    focusable: false,
+    acceptFirstMouse: true,
+    // Frameless windows may then sit over the menu bar, next to the notch.
+    enableLargerThanScreen: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hiddenInMissionControl: true,
+    type: process.platform === "darwin" ? "panel" : undefined,
+  }, hash ? { hash } : undefined);
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.setIgnoreMouseEvents(true, { forward: true });
+  if (process.platform === "darwin") {
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    const presentation = require("./services/protected-presentation.cjs").protectPresentation(
+      win, helperPath("protected-presentation.node"), report,
+    );
+    presentation.setProtection(state.protection);
+    presentations.set(win, presentation);
+  }
+  win.on("close", (event) => {
+    if (!quitting) {
+      event.preventDefault();
+      setHidden(true);
+    }
+  });
+  win.on("blur", () => {
+    if (alive(win) && win.isFocusable()) win.setFocusable(false);
+  });
+  win.webContents.on("did-finish-load", publish);
   return win;
 }
 
@@ -453,16 +554,19 @@ function markerPixels(image) {
   }
   return count;
 }
+// macOS helpers: ScreenCaptureKit, and the older CGDisplayStream that apps
+// such as Telegram still use.
+const captureHelpers = { sck: "capture-sck", legacy: "capture-legacy" };
 async function cropCapture(display, target, capturePath) {
-  if (capturePath === "sck" || capturePath === "cgdisplay") {
+  if (captureHelpers[capturePath]) {
     if (process.platform !== "darwin")
-      throw new Error("ScreenCaptureKit requires macOS.");
+      throw new Error("This capture path requires macOS.");
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), "capture-lab-roi-"));
     const filename = path.join(temp, "crop.png");
     const bounds = target.getBounds();
     try {
       await execFile(
-        helperPath(capturePath === "sck" ? "capture-sck" : "capture-cgdisplay"),
+        helperPath(captureHelpers[capturePath]),
         [
           String(display.id),
           String(bounds.x - display.bounds.x),
@@ -561,7 +665,8 @@ async function runCapture(capturePath = "electron") {
         check();
       })
     `);
-    if (buddyPresentation) await buddyPresentation.prepareCaptureTest(prepareSyntheticContent);
+    if (buddyPresentation())
+      await buddyPresentation().prepareCaptureTest(prepareSyntheticContent);
     else await prepareSyntheticContent();
     // Only Buddy, showing a synthetic card, is briefly unprotected.
     buddy.setContentProtection(false);
@@ -569,7 +674,7 @@ async function runCapture(capturePath = "electron") {
     const baseline = await cropCapture(display, buddy, capturePath),
       baselineCount = markerPixels(baseline);
     buddy.setContentProtection(true);
-    buddyPresentation?.setProtection(true);
+    buddyPresentation()?.setProtection(true);
     await delay(1100);
     const protectedImage = await cropCapture(display, buddy, capturePath),
       protectedCount = markerPixels(protectedImage);
@@ -590,16 +695,18 @@ async function runCapture(capturePath = "electron") {
       detail: !valid
         ? "The unprotected marker was not reliably captured. Retry with the screen unlocked."
         : outcome === "visible"
-          ? "Buddy stayed visible in this capture path. Do not rely on it here."
+          ? capturePath === "legacy"
+            ? "Apps that use the older screen capture (Telegram) still show Buddy. Hide Buddy before you share your screen in them."
+            : "Buddy stayed visible in this capture path. Do not rely on it here."
           : outcome === "excluded"
             ? "Buddy disappeared from this capture path. Check what the other person sees in your meeting app."
             : "The capture changed, but the result was ambiguous.",
       capturePath:
-        capturePath === "cgdisplay"
-          ? "Apple CGDisplayStream, independent process, synthetic window ROI"
-          : capturePath === "sck"
+        capturePath === "sck"
           ? "Apple ScreenCaptureKit SCStream, no excluded windows, synthetic window ROI"
-          : "Electron desktopCapturer full-display thumbnail cropped to synthetic window bounds",
+          : capturePath === "legacy"
+            ? "Apple CGDisplayStream (older apps such as Telegram), synthetic window ROI"
+            : "Electron desktopCapturer full-display thumbnail cropped to synthetic window bounds",
       baseline: baseline.toDataURL(),
       protected: protectedImage.toDataURL(),
       platform: process.platform,
@@ -625,23 +732,37 @@ async function runCapture(capturePath = "electron") {
   }
 }
 async function captureTest() {
+  const labels = {
+    electron: "Screen capture",
+    sck: "ScreenCaptureKit",
+    legacy: "Older screen capture",
+  };
   const paths =
-    process.platform === "darwin" ? ["electron", "sck", "cgdisplay"] : ["electron"];
+    process.platform === "darwin"
+      ? ["electron", "sck", "legacy"]
+      : ["electron"];
   const results = [];
   for (const capturePath of paths) results.push(await runCapture(capturePath));
   const hidden = results.every((r) => r.outcome === "excluded");
+  // CGDisplayStream ignores the sharing flag on macOS 27. That is a known
+  // limit for apps such as Telegram, not a failure of the protection itself.
+  const onlyOlderApps =
+    !hidden &&
+    results.every((r, i) =>
+      paths[i] === "legacy"
+        ? r.outcome === "visible"
+        : r.outcome === "excluded",
+    );
   if (process.platform === "darwin") app.focus({ steal: true });
   await dialog.showMessageBox({
     type: hidden ? "info" : "warning",
     message: hidden
       ? "Buddy was hidden from screen capture."
-      : "Buddy was not hidden in every test.",
+      : onlyOlderApps
+        ? "Buddy was hidden from modern screen capture."
+        : "Buddy was not hidden in every test.",
     detail: results
-      .map(
-        (r) =>
-          `${r.capturePath?.includes("CGDisplayStream") ? "CGDisplayStream" :
-            r.capturePath?.startsWith("Apple") ? "ScreenCaptureKit" : "Screen capture"}: ${r.detail}`,
-      )
+      .map((r, i) => `${labels[paths[i]]}: ${r.detail}`)
       .join("\n\n"),
   });
   return results;
@@ -828,55 +949,13 @@ app
         });
       }));
     const [buddyBounds] = await Promise.all([firstPlacement, callAudioRead]);
-    buddy = create("buddy.html", {
-      title: "Screening — Buddy",
-      ...buddyBounds,
-      frame: false,
-      transparent: true,
-      backgroundColor: "#00000000",
-      hasShadow: false,
-      roundedCorners: false,
-      resizable: false,
-      movable: true,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      // The meeting app keeps keyboard focus until a Buddy text field is used.
-      focusable: false,
-      acceptFirstMouse: true,
-      // Frameless windows may then sit over the menu bar, next to the notch.
-      enableLargerThanScreen: true,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      hiddenInMissionControl: true,
-      type: process.platform === "darwin" ? "panel" : undefined,
-    });
-    buddy.setAlwaysOnTop(true, "screen-saver");
-    buddy.setIgnoreMouseEvents(true, { forward: true });
-    if (process.platform === "darwin")
-      buddy.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    if (process.platform === "darwin") {
-      buddyPresentation = require("./services/protected-presentation.cjs").protectPresentation(
-        buddy, helperPath("protected-presentation.node"), report,
-      );
-      buddyPresentation.setProtection(state.protection);
-    }
-    buddy.on("close", (event) => {
-      if (!quitting) {
-        event.preventDefault();
-        setHidden(true);
-      }
-    });
-    buddy.on("blur", () => {
-      if (alive(buddy) && buddy.isFocusable()) buddy.setFocusable(false);
-    });
+    buddy = createBuddy(buddyBounds);
     for (const event of [
       "display-metrics-changed",
       "display-added",
       "display-removed",
     ])
       screen.on(event, placeAfterDisplayChange);
-    buddy.webContents.on("did-finish-load", publish);
 
     interview = await require("./services/interview.cjs").createInterview(
       app,
@@ -886,7 +965,7 @@ app
         windowCapture:
           new (require("./services/window-capture.cjs").WindowCapture)(() => [
             buddy.getMediaSourceId(),
-            ...(buddyPresentation ? [buddyPresentation.getMediaSourceId()] : []),
+            ...(buddyPresentation() ? [buddyPresentation().getMediaSourceId()] : []),
             ...(alive(engine) ? [engine.getMediaSourceId()] : []),
           ]),
         getNotes: () => state.notes,
@@ -940,6 +1019,11 @@ app
       throw new Error("Unsupported action.");
     });
     // Outside the island, clicks pass through to the apps below.
+    ipcMain.on("buddy:memory", (event, memory) => {
+      if (event.senderFrame !== buddy?.webContents.mainFrame) return;
+      if (memory && typeof memory === "object" && JSON.stringify(memory).length < 20000)
+        buddyMemory = memory;
+    });
     ipcMain.on("buddy:mouse", (event, inside) => {
       if (event.senderFrame !== buddy.webContents.mainFrame || state.testing)
         return;
@@ -1014,8 +1098,13 @@ app
       await delay(800);
       await require("./verify.cjs")({
         app,
-        buddy,
-        buddyPresentation,
+        // Turning protection off can move Buddy to a new window.
+        get buddy() {
+          return buddy;
+        },
+        get buddyPresentation() {
+          return buddyPresentation();
+        },
         engine,
         tray,
         interview,
@@ -1033,6 +1122,7 @@ app
         permission,
         setDock,
         access,
+        replaceBuddy,
         delay,
       });
       if (!process.argv.includes("--keep-open")) app.quit();
@@ -1044,7 +1134,7 @@ app
   });
 app.on("before-quit", () => {
   quitting = true;
-  buddyPresentation?.stop();
+  for (const win of [buddy, ...retiring]) presentations.get(win)?.stop();
   audioRouting?.close();
   interview?.close();
 });

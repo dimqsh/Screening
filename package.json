@@ -1,6 +1,6 @@
 {
   "name": "screening",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "description": "Interview answers at your MacBook notch, right under your camera. Local Whisper, ChatGPT answers, hidden from screen sharing.",
   "main": "src/main.cjs",
   "private": true,
@@ -13,10 +13,9 @@
     "verify": "electron . --verify",
     "verify:capture": "electron . --verify --capture-test",
     "verify:protected": "node scripts/build-native.cjs --presentation-tests && electron . --verify --protected-test --capture-test",
-    "package:mac": "npm run build:native -- --arch arm64 && node scripts/prepare-runtime.cjs --arch arm64 && electron-builder --mac dmg --arm64 --publish never",
-    "package:mac:x64": "npm run build:native -- --arch x64 && node scripts/prepare-runtime.cjs --arch x64 && electron-builder --mac dmg --x64 --publish never",
-    "build:onnxruntime:x64": "node scripts/build-onnxruntime.cjs --build --install",
-    "test": "node --test test/unit.test.cjs test/buddy.test.cjs",
+    "package:mac": "node scripts/build-native.cjs arm64 && node scripts/prepare-runtime.cjs arm64 && electron-builder --mac dmg --arm64 --publish never",
+    "package:mac:x64": "node scripts/build-native.cjs x64 && node scripts/prepare-runtime.cjs x64 && electron-builder --mac dmg --x64 --publish never",
+    "test": "node --test test/unit.test.cjs test/buddy.test.cjs test/live-speech.test.cjs",
     "package:win": "node scripts/prepare-runtime.cjs && electron-builder --win nsis --x64 --publish never",
     "verify:interview": "electron . --verify --interview-test",
     "verify:audio": "electron . --verify --interview-test --audio-test"
@@ -43,15 +42,16 @@
       "src/**/*",
       "package.json",
       "!node_modules/@openai/**/*",
+      "!**/node_modules/onnxruntime-node/bin/napi-v6/!(${platform}){,/**}",
+      "!**/node_modules/onnxruntime-node/bin/napi-v6/${platform}/!(${arch}){,/**}",
+      "!**/node_modules/@img/sharp-!(${platform}-${arch}|libvips-${platform}-${arch}){,/**}",
+      "!**/node_modules/onnxruntime-web{,/**}",
       "LICENSE",
       "assets/models/**/*",
       "assets/licenses/**/*",
       "assets/brand/**/*",
       "assets/tray/**/*",
-      "!node_modules/onnxruntime-web/**/*",
-      "!node_modules/onnxruntime-node/bin/napi-v6/!(${platform})/**/*",
-      "!node_modules/onnxruntime-node/bin/napi-v6/${platform}/!(${arch})/**/*",
-      "!node_modules/onnxruntime-node/bin/napi-v6/*/*/libonnxruntime.*.*.*.dylib"
+      "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.*.*.*.dylib"
     ],
     "asar": true,
     "asarUnpack": [
@@ -93,11 +93,12 @@
           "to": "bin",
           "filter": [
             "capture-sck",
+            "capture-legacy",
             "audio-sck",
             "audio-tap",
             "notch-info",
-            "protected-presentation.node",
-            "capture-cgdisplay"
+            "live-speech",
+            "protected-presentation.node"
           ]
         }
       ],

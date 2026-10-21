@@ -25,7 +25,16 @@ test("runtime resolves to a native executable on the host", () => {
   if (process.platform !== "win32") assert.ok(fs.statSync(binary).mode & 0o100);
 });
 
-test("speech detector rejects steady noise that Whisper can hallucinate on", async () => {
+// onnxruntime-node ships no Intel Mac binary; scripts/prepare-runtime.cjs adds
+// one only when packaging, and the packaged app's verify runs the detector.
+let onnxruntime = null;
+try {
+  require("onnxruntime-node");
+  onnxruntime = true;
+} catch {
+  onnxruntime = false;
+}
+test("speech detector rejects steady noise that Whisper can hallucinate on", { skip: !onnxruntime && "no onnxruntime binary for this computer until packaging" }, async () => {
   const { SpeechGate } = require("../src/services/speech-gate.cjs");
   const gate = new SpeechGate();
   await gate.load();

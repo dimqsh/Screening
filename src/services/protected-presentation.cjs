@@ -17,6 +17,12 @@ function protectPresentation(window, binary, onError) {
   let firstFrameRetries = 40;
   // Pooled frame buffers are let go once Buddy has been still for a moment.
   let trimTimer = null;
+  // Settles with the first frame on screen, or with the failure.
+  let settleReady;
+  const ready = new Promise((resolve, reject) => {
+    settleReady = { resolve, reject };
+  });
+  ready.catch(() => {});
 
   function fail(error) {
     if (stopped || failed) return;
@@ -25,7 +31,9 @@ function protectPresentation(window, binary, onError) {
     unsubscribe();
     window.hide();
     native.close(handle);
-    onError(new Error(`Buddy's protected display stopped: ${error.message}`));
+    const failure = new Error(`Buddy's protected display stopped: ${error.message}`);
+    settleReady.reject(failure);
+    onError(failure);
   }
   function present(image) {
     if (image.isEmpty()) throw new Error("Buddy did not produce a display frame.");
@@ -52,6 +60,7 @@ function protectPresentation(window, binary, onError) {
       throw new Error("Buddy's protected presentation lost its source view.");
     if (!status.layerHosted)
       throw new Error("Buddy's protected display layer was detached.");
+    settleReady.resolve();
   }
   // An explicit frame: at load, on show, and when a test needs one now.
   async function refresh() {
@@ -142,6 +151,7 @@ function protectPresentation(window, binary, onError) {
   const syncTimer = setInterval(() => sync(), 500);
   window.once("closed", stop);
   return {
+    ready,
     refresh,
     sync,
     stop,

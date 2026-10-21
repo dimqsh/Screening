@@ -1,7 +1,7 @@
 // Cuts live audio into phrases at natural pauses, so each phrase reaches
 // Whisper about half a second after the speaker stops, instead of waiting for
-// a fixed eight-second block. Used by the audio engine (microphone) and the
-// main process (call audio).
+// a fixed eight-second block. The main process cuts both the call and the
+// microphone; the audio engine only brings the microphone down to 16 kHz.
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.Segmenter = factory();
@@ -89,5 +89,28 @@
       },
     };
   }
-  return { createSegmenter };
+  // Brings audio down to 16 kHz chunk by chunk, carrying the position between
+  // chunks, so a stream of any chunk size comes out as one continuous signal.
+  function createResampler(from, to = 16000) {
+    const step = from / to;
+    let position = 0,
+      previous = 0;
+    return (input) => {
+      const out = new Float32Array(Math.max(0, Math.ceil((input.length - 1 - position) / step)));
+      let count = 0;
+      // A position below zero falls between the last sample of the previous chunk and this one.
+      for (; position < input.length - 1 && count < out.length; position += step) {
+        const left = Math.floor(position),
+          mix = position - left;
+        const a = left < 0 ? previous : input[left];
+        out[count++] = a * (1 - mix) + input[left + 1] * mix;
+      }
+      if (input.length) {
+        position -= input.length;
+        previous = input[input.length - 1];
+      }
+      return count === out.length ? out : out.subarray(0, count);
+    };
+  }
+  return { createSegmenter, createResampler };
 });

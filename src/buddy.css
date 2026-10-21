@@ -623,6 +623,11 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Live words cut at the start, so the newest stay in view. */
+.activity li.tail span {
+  direction: rtl;
+  text-align: left;
+}
 .activity svg {
   width: 13px;
   height: 13px;
@@ -1105,6 +1110,18 @@ kbd {
 }
 .transcript .empty-text {
   margin: 8px 0;
+}
+/* Words Apple has not settled yet end in the streaming caret. */
+.line.live p::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  border-radius: 2px;
+  background: linear-gradient(var(--cyan), var(--violet));
+  animation: blink 1s steps(2, start) infinite;
 }
 
 /* Notes and You */

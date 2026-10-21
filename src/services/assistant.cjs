@@ -2,8 +2,6 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
-// The packaged runtime, or the npm one for this machine. Packaging for the
-// other Mac architecture passes that arch (scripts/prepare-runtime.cjs).
 function binaryPath(arch = process.arch) {
   if (
     process.resourcesPath &&

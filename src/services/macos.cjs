@@ -18,4 +18,10 @@ function hasSystemPicker(platform = process.platform, release = os.release()) {
   return platform === "darwin" && darwin(release).major >= 24;
 }
 
-module.exports = { hasAudioTap, hasSystemPicker };
+// Darwin 25 is macOS 26, the first with SpeechAnalyzer: live, word-by-word
+// transcription on the Mac.
+function hasLiveSpeech(platform = process.platform, release = os.release()) {
+  return platform === "darwin" && darwin(release).major >= 25;
+}
+
+module.exports = { hasAudioTap, hasSystemPicker, hasLiveSpeech };

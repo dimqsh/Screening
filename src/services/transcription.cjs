@@ -17,7 +17,7 @@ class Transcription {
     onText,
     onLevel = () => {},
     model = SPEECH_MODEL,
-    { createWorker, idleMs = IDLE_UNLOAD_MS } = {},
+    { createWorker, idleMs = IDLE_UNLOAD_MS, live = null } = {},
   ) {
     this.cacheDir = cacheDir;
     this.model = model;
@@ -29,6 +29,10 @@ class Transcription {
       ((workerData) =>
         new Worker(path.join(__dirname, "whisper-worker.cjs"), { workerData }));
     this.idleMs = idleMs;
+    this.live = live;
+    this.session = null;
+    this.ending = Promise.resolve();
+    this.installing = new Map();
     this.worker = null;
     this.loaded = false;
     this.warm = false;
@@ -46,6 +50,15 @@ class Transcription {
       pending: 0,
       recording: false,
       source: null,
+      // "apple" or "whisper" while listening.
+      engine: null,
+      // Apple's words so far in the current sentence; they may still change.
+      partial: "",
+      // Whether this Mac has Apple's live transcription at all, and what it
+      // offers for the speech language: { language, locale, model, installed }.
+      liveSupported: Boolean(live),
+      live: null,
+      liveProgress: null,
     };
   }
   update(patch) {
@@ -228,22 +241,170 @@ class Transcription {
       );
     });
   }
-  async startNative(helper, language) {
+  // What Apple's live transcription offers for a language. A language Apple
+  // supports but has not downloaded yet starts downloading, and Whisper
+  // listens until it is ready.
+  async checkLive(language, { install = false } = {}) {
+    if (!this.live) return null;
+    const found = await this.live.check(language);
+    const info = found ? { language, ...found } : null;
+    this.update({ live: info });
+    if (info && !info.installed && install) this.installLive(language);
+    return info;
+  }
+  installLive(language) {
+    if (!this.installing.has(language)) {
+      // Setup and the menu show the download from its start.
+      this.update({ liveProgress: 0 });
+      this.installing.set(
+        language,
+        this.live
+          .install(language, (progress) => this.update({ liveProgress: progress }))
+          .catch((e) => this.update({ error: `Apple speech download: ${e.message}` }))
+          .finally(() => {
+            this.installing.delete(language);
+            this.update({ liveProgress: null });
+            if (this.state.live?.language === language) this.checkLive(language);
+          }),
+      );
+    }
+    return this.installing.get(language);
+  }
+  // A listening session. Apple's live transcription writes words as they are
+  // spoken; without it (older macOS, Kazakh, automatic language, or the
+  // Whisper choice), speech is cut into phrases at pauses for Whisper.
+  // Resolves false when listening was stopped before it started.
+  async begin(language, { live = true } = {}) {
+    await this.ending;
+    if (this.session) throw new Error("Recording already started.");
+    const session = { language, engine: "whisper", segmenter: null, done: false };
+    this.session = session;
+    const stopped = () => session !== this.session;
+    if (live && this.live) {
+      try {
+        const info = await this.checkLive(language, { install: true });
+        if (stopped()) return false;
+        if (info?.installed) {
+          await this.live.start(language, {
+            onPartial: (text) => {
+              if (session.done) return;
+              // Words started before New Session belong to the old session.
+              session.since ??= this.generation;
+              this.update({ partial: text });
+            },
+            onFinal: (text) => {
+              if (session.done) return;
+              const stale = session.since !== undefined && session.since !== this.generation;
+              session.since = undefined;
+              this.update({ partial: "" });
+              if (text && !stale) this.onText?.(text);
+              session.settled?.();
+            },
+            // The helper stopped on its own: Whisper takes over when it is
+            // on disk; otherwise the words stop until listening starts again.
+            onExit: (error) => {
+              if (session.done || session !== this.session) return;
+              const reason = `Apple speech stopped${error ? `: ${error.message}` : ""}`;
+              if (!this.state.ready) {
+                session.engine = null;
+                this.update({
+                  engine: null,
+                  partial: "",
+                  error: `${reason}. Stop and listen again, or download Whisper so it can take over.`,
+                });
+                return;
+              }
+              this.useWhisper(session);
+              if (error) this.update({ error: reason });
+            },
+          });
+          if (stopped()) {
+            await this.live.stop().catch(() => {});
+            return false;
+          }
+          session.engine = "apple";
+        }
+      } catch (error) {
+        if (stopped()) return false;
+        this.update({ error: `Apple speech is unavailable, using Whisper: ${error.message}` });
+      }
+    }
+    if (session.engine === "whisper" && !this.state.ready) {
+      this.session = null;
+      throw new Error("Download the speech model before listening.");
+    }
+    if (session.engine === "whisper") this.useWhisper(session);
+    else this.update({ engine: "apple", partial: "" });
+    return true;
+  }
+  useWhisper(session) {
+    session.engine = "whisper";
+    session.segmenter = createSegmenter({
+      rate: 16000,
+      onSegment: (phrase) => this.feed(phrase, session.language),
+    });
+    this.update({ engine: "whisper", partial: "" });
+  }
+  // An answer asked for now should include the sentence still being spoken:
+  // Apple settles it, usually within a tenth of a second.
+  settle(timeoutMs = 1500) {
+    const session = this.session;
+    if (session?.engine !== "apple" || !this.state.partial) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      session.settled = () => {
+        clearTimeout(timer);
+        session.settled = null;
+        resolve();
+      };
+      this.live.settle();
+    });
+  }
+  // 16 kHz mono audio from the call or the microphone, in any chunk size.
+  push(samples) {
+    const session = this.session;
+    if (!session) return;
+    if (session.engine === "apple") this.live.write(samples);
+    else session.segmenter?.push(samples);
+  }
+  // Stopping keeps the last words: Apple settles them, Whisper gets the rest.
+  end() {
+    const session = this.session;
+    if (!session) return this.ending;
+    this.session = null;
+    this.ending = (async () => {
+      try {
+        if (session.engine === "apple") await this.live.stop();
+        else session.segmenter?.flush();
+      } finally {
+        session.done = true;
+        this.update({ engine: null, partial: "" });
+      }
+    })().catch(() => {});
+    return this.ending;
+  }
+  async startNative(helper, language, options) {
     if (process.platform !== "darwin")
       throw new Error("Native audio requires macOS");
-    if (!this.state.ready) throw new Error("Load Whisper first.");
     if (this.native) throw new Error("Recording already started.");
+    this.update({ recording: false, source: "system", error: null });
+    let started;
+    try {
+      started = await this.begin(language, options);
+    } catch (error) {
+      this.update({ source: null });
+      throw error;
+    }
+    if (!started) {
+      this.update({ source: null });
+      return;
+    }
     let leftover = Buffer.alloc(0),
       diagnostic = "",
       ready = false,
       lastLevelAt = 0;
-    const segmenter = createSegmenter({
-      rate: 16000,
-      onSegment: (phrase) => this.feed(phrase, language),
-    });
     const child = spawn(helper, [], { stdio: ["ignore", "pipe", "pipe"] });
     this.native = child;
-    this.update({ recording: false, source: "system", error: null });
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         child.kill();
@@ -274,7 +435,7 @@ class Transcription {
         const whole = bytes.length - (bytes.length % 4);
         leftover = bytes.subarray(whole);
         if (whole)
-          segmenter.push(new Float32Array(new Uint8Array(bytes.subarray(0, whole)).buffer));
+          this.push(new Float32Array(new Uint8Array(bytes.subarray(0, whole)).buffer));
       });
       child.stderr.on("data", (chunk) => {
         diagnostic = (diagnostic + chunk).slice(-4000);
@@ -288,18 +449,20 @@ class Transcription {
       child.once("error", (error) => {
         clearTimeout(timer);
         this.native = null;
-        this.update({ recording: false, error: error.message });
+        this.end();
+        this.update({ recording: false, source: null, error: error.message });
         reject(error);
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         this.native = null;
-        segmenter.flush();
+        this.end();
         const message =
           diagnostic.replace("SCREENING_AUDIO_READY", "").trim().slice(-400) ||
           "Call audio stopped. Check Screening under System Audio Recording Only in Privacy & Security.";
         this.update({
           recording: false,
+          source: null,
           ...((code && code !== 0) || !ready ? { error: message } : {}),
         });
         this.onLevel(0);
@@ -321,15 +484,18 @@ class Transcription {
         });
         child.kill("SIGTERM");
       });
+    await this.end();
     this.update({ recording: false, source: null });
   }
   clear() {
     this.generation++;
     this.waiting = null;
+    this.update({ partial: "" });
   }
   close() {
     this.cancelUnload();
     this.native?.kill();
+    this.live?.close();
     this.worker?.terminate();
     for (const job of this.pending.values()) job.reject(new Error("Closed"));
     this.pending.clear();

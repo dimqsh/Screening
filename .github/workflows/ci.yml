@@ -29,7 +29,7 @@ jobs:
             arch: x64
             app: dist/win-unpacked/Screening.exe
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 45
     env:
       CAPTURE_LAB_ARTIFACTS: ${{ github.workspace }}/validation/ci
       CAPTURE_LAB_MODEL_CACHE: ${{ github.workspace }}/build/model-cache
@@ -44,21 +44,9 @@ jobs:
       - run: npm test
       - name: Build the macOS helpers
         if: matrix.platform == 'mac'
-        run: node scripts/build-native.cjs --arch ${{ matrix.arch }}
-      - name: Restore ONNX Runtime for Intel Macs
-        if: matrix.platform == 'mac' && matrix.arch == 'x64'
-        id: ort
-        uses: actions/cache@v4
-        with:
-          path: build/onnxruntime-darwin-x64
-          key: onnxruntime-darwin-x64-${{ hashFiles('scripts/build-onnxruntime.cjs', 'package-lock.json') }}
-      - name: Build ONNX Runtime for Intel Macs
-        if: matrix.platform == 'mac' && matrix.arch == 'x64' && steps.ort.outputs.cache-hit != 'true'
-        run: node scripts/build-onnxruntime.cjs --build
-      - name: Install ONNX Runtime for Intel Macs
-        if: matrix.platform == 'mac' && matrix.arch == 'x64'
-        run: node scripts/build-onnxruntime.cjs --install
-      - run: node scripts/prepare-runtime.cjs --arch ${{ matrix.arch }}
+        run: node scripts/build-native.cjs ${{ matrix.arch }}
+      # On Intel Macs this also unpacks onnxruntime-node's last Intel binary.
+      - run: node scripts/prepare-runtime.cjs ${{ matrix.arch }}
       - run: node scripts/prepare-speech-test.cjs
       - name: Package without publishing
         run: npx electron-builder --${{ matrix.platform }} dir --${{ matrix.arch }} --publish never

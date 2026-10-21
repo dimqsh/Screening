@@ -78,8 +78,9 @@ const permission = () =>
 const buddyShown = () => (state.testing ? true : !state.hidden);
 // Microphone and call-audio access on macOS. Call audio uses a Core Audio
 // tap, whose permission only the tap helper can read, so that answer is
-// cached and re-read in the background at most every 15 seconds. Before
-// macOS 14.2 call audio goes through ScreenCaptureKit and screen recording.
+// cached and re-read in the background at most every 15 seconds, or every
+// five minutes once it is granted. Before macOS 14.2 call audio goes
+// through ScreenCaptureKit and screen recording.
 let accessCache = null;
 let callAudio = { status: "not-determined", at: 0, reading: null };
 function readCallAudio() {
@@ -100,7 +101,8 @@ function readCallAudio() {
 function access() {
   if (process.platform !== "darwin") return null;
   if (accessCache && Date.now() - accessCache.at < 2000) return accessCache.value;
-  if (Date.now() - callAudio.at > 15000) readCallAudio();
+  const maxAge = callAudio.status === "granted" ? 300000 : 15000;
+  if (Date.now() - callAudio.at > maxAge) readCallAudio();
   const value = {
     microphone: systemPreferences.getMediaAccessStatus("microphone"),
     audio: hasAudioTap() ? callAudio.status : permission(),

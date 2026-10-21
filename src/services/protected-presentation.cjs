@@ -12,6 +12,9 @@ function protectPresentation(window, binary, onError) {
   // When the newest frame reached the native layer, so a slower explicit
   // capture never replaces it with an older picture.
   let presentedAt = 0;
+  // Before Buddy's first paint a capture comes back empty; that is not a
+  // display failure. Retry for up to two seconds before treating it as one.
+  let firstFrameRetries = 40;
 
   function fail(error) {
     if (stopped || failed) return;
@@ -61,6 +64,10 @@ function protectPresentation(window, binary, onError) {
         ]).finally(() => clearTimeout(deadline));
         if (stopped || failed || window.isDestroyed()) return;
         if (presentedAt > requestedAt && !paused) return;
+        if (image.isEmpty() && !presentedAt && firstFrameRetries-- > 0) {
+          setTimeout(refresh, 50);
+          return;
+        }
         present(image);
       } catch (error) {
         fail(error);
@@ -104,7 +111,9 @@ function protectPresentation(window, binary, onError) {
     native.close(handle);
   };
   window.webContents.once("did-finish-load", () => {
-    refresh().then(subscribe);
+    // Subscribe first, so the first paint after load is never missed.
+    subscribe();
+    refresh();
   });
   window.webContents.on("render-process-gone", () => {
     failed = true;

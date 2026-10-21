@@ -247,6 +247,16 @@ function notchFor(display) {
     };
   return notchCache.notch;
 }
+// Display changes arrive in bursts (a resolution change sends several);
+// Buddy is placed once they settle.
+let displayChangeTimer = null;
+function placeAfterDisplayChange() {
+  clearTimeout(displayChangeTimer);
+  displayChangeTimer = setTimeout(
+    () => placeBuddy().then(publish).catch(console.error),
+    150,
+  );
+}
 let placedBounds = null;
 function setBuddyBounds(bounds) {
   placedBounds = bounds;
@@ -863,7 +873,7 @@ app
       "display-added",
       "display-removed",
     ])
-      screen.on(event, () => placeBuddy().then(publish).catch(console.error));
+      screen.on(event, placeAfterDisplayChange);
     buddy.webContents.on("did-finish-load", publish);
 
     interview = await require("./services/interview.cjs").createInterview(

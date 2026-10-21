@@ -794,13 +794,24 @@ app
       ]),
     );
 
-    engine = create("engine.html", {
-      title: "Screening audio engine",
-      width: 320,
-      height: 200,
-      skipTaskbar: true,
-      focusable: false,
-    });
+    // The hidden engine only captures the microphone and Windows call audio
+    // (macOS call audio uses the native tap), so it starts on the first audio
+    // command instead of at launch. Commands wait until it has loaded.
+    let engineLoaded = null;
+    const ensureEngine = () =>
+      (engineLoaded ??= new Promise((resolve) => {
+        engine = create("engine.html", {
+          title: "Screening audio engine",
+          width: 320,
+          height: 200,
+          skipTaskbar: true,
+          focusable: false,
+        });
+        engine.webContents.once("did-finish-load", () => {
+          publish();
+          resolve();
+        });
+      }));
     const [buddyBounds] = await Promise.all([firstPlacement, callAudioRead]);
     buddy = create("buddy.html", {
       title: "Screening — Buddy",
@@ -861,7 +872,7 @@ app
           new (require("./services/window-capture.cjs").WindowCapture)(() => [
             buddy.getMediaSourceId(),
             ...(buddyPresentation ? [buddyPresentation.getMediaSourceId()] : []),
-            engine.getMediaSourceId(),
+            ...(alive(engine) ? [engine.getMediaSourceId()] : []),
           ]),
         getNotes: () => state.notes,
         onLevel: publishAudioLevel,
@@ -871,7 +882,10 @@ app
     // Saved settings may say Buddy floats somewhere; place it there now.
     await placeBuddy();
     audioRouting = new (require("./services/audio-routing.cjs").AudioRouting)(
-      (command) => engine.webContents.send("audio:command", command),
+      (command) =>
+        ensureEngine()
+          .then(() => engine.webContents.send("audio:command", command))
+          .catch((error) => audioRouting.complete(command.id, error.message)),
     );
 
     tray = new Tray(trayImage(false));
@@ -900,7 +914,7 @@ app
         (w) => alive(w) && event.senderFrame === w.webContents.mainFrame,
       );
     const fromEngine = (event) =>
-      event.senderFrame === engine.webContents.mainFrame;
+      alive(engine) && event.senderFrame === engine.webContents.mainFrame;
     ipcMain.handle("lab:change", (event, key, value) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
       return change(key, value);
@@ -972,19 +986,16 @@ app
       if (!fromEngine(event)) throw new Error("Untrusted frame");
       return interview.audio(buffer);
     });
-    await Promise.all(
-      [buddy, engine].map(
-        (win) =>
-          new Promise((resolve) =>
-            win.webContents.isLoading()
-              ? win.webContents.once("did-finish-load", resolve)
-              : resolve(),
-          ),
-      ),
+    await new Promise((resolve) =>
+      buddy.webContents.isLoading()
+        ? buddy.webContents.once("did-finish-load", resolve)
+        : resolve(),
     );
     publish();
     if (!verification) ask();
     if (verification) {
+      // The checks exercise the engine directly.
+      await ensureEngine();
       await delay(800);
       await require("./verify.cjs")({
         app,

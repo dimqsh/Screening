@@ -44,7 +44,11 @@
       "assets/models/**/*",
       "assets/licenses/**/*",
       "assets/brand/**/*",
-      "assets/tray/**/*"
+      "assets/tray/**/*",
+      "!node_modules/onnxruntime-web/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/!(${platform})/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/${platform}/!(${arch})/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/*/*/libonnxruntime.*.*.*.dylib"
     ],
     "asar": true,
     "asarUnpack": [
@@ -66,6 +70,9 @@
       "minimumSystemVersion": "14.0",
       "target": [
         "dmg"
+      ],
+      "electronLanguages": [
+        "en"
       ],
       "category": "public.app-category.productivity",
       "identity": null,

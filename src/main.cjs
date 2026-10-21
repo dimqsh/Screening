@@ -410,7 +410,10 @@ const toggleListening = () =>
 function create(file, options) {
   const win = new BrowserWindow({
     show: false,
-    icon: path.join(__dirname, "..", "assets", "brand", "screening.png"),
+    // macOS ignores window icons; decoding this 1254 px PNG still took 6-8 ms per window.
+    ...(process.platform === "darwin"
+      ? {}
+      : { icon: path.join(__dirname, "..", "assets", "brand", "screening.png") }),
     ...options,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),

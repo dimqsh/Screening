@@ -230,6 +230,23 @@ function syncBuddy() {
   }
   buddyPresentation?.sync(show);
 }
+// The camera housing of a display never moves, so the helper runs once per
+// display: a new display or resolution gets its own run. Callers share one
+// pending run.
+let notchCache = null;
+function notchFor(display) {
+  const key = `${display.id}:${display.bounds.width}x${display.bounds.height}@${display.scaleFactor}`;
+  if (notchCache?.key !== key)
+    notchCache = {
+      key,
+      notch: notchGeometry.detectNotch({
+        display,
+        helper: process.platform === "darwin" ? helperPath("notch-info") : null,
+        run: execFile,
+      }),
+    };
+  return notchCache.notch;
+}
 let placedBounds = null;
 function setBuddyBounds(bounds) {
   placedBounds = bounds;
@@ -248,11 +265,7 @@ async function placeBuddy() {
     return placed.window;
   }
   const display = screen.getPrimaryDisplay();
-  const notch = await notchGeometry.detectNotch({
-    display,
-    helper: process.platform === "darwin" ? helperPath("notch-info") : null,
-    run: execFile,
-  });
+  const notch = await notchFor(display);
   const placed = notchGeometry.islandLayout({ display, notch });
   buddyLayout = placed.layout;
   if (alive(buddy) && !state.testing) setBuddyBounds(placed.window);
@@ -710,8 +723,10 @@ app
   .whenReady()
   .then(async () => {
     if (process.platform === "darwin") app.dock?.hide();
-    // Buddy's first look already knows whether call audio is allowed.
-    await readCallAudio();
+    // The notch and call-audio helpers run together while the menu and the
+    // engine are set up; Buddy's first look still knows the call audio answer.
+    const firstPlacement = placeBuddy();
+    const callAudioRead = readCallAudio();
     ipcMain.handle("lab:state", (event) =>
       event.senderFrame === engine?.webContents.mainFrame
         ? engineSnapshot(snapshot())
@@ -786,7 +801,7 @@ app
       skipTaskbar: true,
       focusable: false,
     });
-    const buddyBounds = await placeBuddy();
+    const [buddyBounds] = await Promise.all([firstPlacement, callAudioRead]);
     buddy = create("buddy.html", {
       title: "Screening — Buddy",
       ...buddyBounds,

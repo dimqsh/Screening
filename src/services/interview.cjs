@@ -150,8 +150,7 @@ async function createInterview(
       /* Setup offers the download. */
     }
   }
-  await ai.status();
-  await markIfDownloaded();
+  await Promise.all([ai.status(), markIfDownloaded()]);
   let saveQueue = Promise.resolve();
   async function save() {
     const { context, ...saved } = settings;

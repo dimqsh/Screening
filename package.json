@@ -101,7 +101,8 @@
       "icon": "assets/icon.png"
     },
     "dmg": {
-      "sign": false
+      "sign": false,
+      "format": "ULFO"
     },
     "win": {
       "target": [

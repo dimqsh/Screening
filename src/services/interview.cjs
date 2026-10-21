@@ -41,6 +41,7 @@ async function createInterview(
     answerLanguage: "en",
     autoAnswer: false,
     style: "concise",
+    answerSpeed: "fast",
     context: "",
     interviewType: "general",
     notesEnabled: true,
@@ -59,6 +60,7 @@ async function createInterview(
       "answerLanguage",
       "autoAnswer",
       "style",
+      "answerSpeed",
       "interviewType",
       "notesEnabled",
       "includeNotes",
@@ -108,6 +110,12 @@ async function createInterview(
       activeTurn.error = value.error;
     }
     update();
+  }, {
+    // Screening's own Codex home, outside the per-run test data, so answers
+    // never load the person's Codex config, plugins, MCP servers or hooks.
+    home:
+      process.env.SCREENING_CODEX_HOME ||
+      path.join(app.getPath("appData"), "Capture Lab", "codex"),
   });
   state.ai = ai.state;
   const whisper = new Transcription(
@@ -126,14 +134,20 @@ async function createInterview(
       if (state.transcript.length > 120) state.transcript.shift();
       update();
       clearTimeout(autoTimer);
+      // Phrases now arrive as people pause, so a pause alone is not the end of
+      // a question. A question mark answers almost at once; otherwise Buddy
+      // waits a little longer for more speech.
       if (settings.autoAnswer)
-        autoTimer = setTimeout(() => {
-          if (!ai.state.busy && ai.state.connected && !state.attachment)
-            answer("").catch((e) => {
-              state.error = e.message;
-              update();
-            });
-        }, 1400);
+        autoTimer = setTimeout(
+          () => {
+            if (!ai.state.busy && ai.state.connected && !state.attachment)
+              answer("").catch((e) => {
+                state.error = e.message;
+                update();
+              });
+          },
+          /[?？]\s*$/.test(text) ? 600 : 2500,
+        );
     },
     onLevel,
     speechModel(settings.speechModel),
@@ -193,9 +207,21 @@ async function createInterview(
         "hr",
       ].includes(value);
     if (key === "style") return ["concise", "detailed"].includes(value);
+    if (key === "answerSpeed") return ["fast", "best"].includes(value);
     if (key === "context")
       return typeof value === "string" && value.length <= 16000;
     return false;
+  }
+  // The question is what was said in the last 45 seconds, at most 10 phrases.
+  function recentSpeech() {
+    const last = state.transcript.at(-1);
+    if (!last) return "";
+    const since = Date.parse(last.time) - 45000;
+    return state.transcript
+      .slice(-10)
+      .filter((t) => Date.parse(t.time) >= since)
+      .map((t) => t.text)
+      .join("\n");
   }
   async function answer(question) {
     state.error = null;
@@ -209,10 +235,7 @@ async function createInterview(
       question.trim() ||
       (attachment
         ? "Help me answer the task in this screenshot."
-        : state.transcript
-            .slice(-4)
-            .map((t) => t.text)
-            .join("\n"));
+        : recentSpeech());
     if (!input)
       throw new Error(
         "Type a question, record speech, or attach a window screenshot first.",
@@ -252,6 +275,7 @@ async function createInterview(
         context: settings.context,
         language: settings.answerLanguage,
         style: settings.style,
+        speed: settings.answerSpeed,
         history,
         interviewType: settings.interviewType,
         notes: settings.notesEnabled && settings.includeNotes ? getNotes() : "",
@@ -415,10 +439,7 @@ async function createInterview(
       if (!state.recording) throw new Error("Recording is stopped.");
       if (!(buffer instanceof ArrayBuffer))
         throw new Error("Invalid audio buffer");
-      return whisper.transcribe(
-        new Float32Array(buffer),
-        settings.speechLanguage,
-      );
+      whisper.feed(new Float32Array(buffer), settings.speechLanguage);
     },
     close() {
       closed = true;

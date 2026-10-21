@@ -706,40 +706,39 @@ test("call audio uses a tap from macOS 14.2 and snapshots the picker from macOS 
   assert.equal(hasSystemPicker("darwin", "24.0.0"), true);
   assert.equal(hasSystemPicker("win32", "10.0.26100"), false);
 });
-test("call audio is cut into 8 s segments however the helper splits it", { skip: process.platform !== "darwin" }, async () => {
-  const fs = require("node:fs");
-  const os = require("node:os");
-  const path = require("node:path");
-  // A stand-in for audio-tap: 9 s of numbered samples in 4 KB blocks.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "screening-tap-"));
-  const helper = path.join(dir, "audio-tap");
-  fs.writeFileSync(helper, `#!${process.execPath}
-process.stderr.write("SCREENING_AUDIO_READY\\n");
-const all = new Float32Array(16000 * 9).map((_, i) => i);
-const bytes = Buffer.from(all.buffer);
-let offset = 0;
-const next = () => {
-  if (offset >= bytes.length) return;
-  process.stdout.write(bytes.subarray(offset, offset + 4096), next);
-  offset += 4096;
-};
-next();
-`, { mode: 0o755 });
-  const stt = new Transcription("/tmp/none", () => {}, () => {}, () => {}, SPEECH_MODELS.fast, {
-    createWorker: fakeWorkers().create,
-  });
-  stt.markDownloaded();
-  const segments = [];
-  stt.transcribe = (samples) => {
-    segments.push([samples.length, samples[0], samples[samples.length - 1]]);
-    return Promise.resolve("");
-  };
-  await stt.startNative(helper, "en");
-  while (stt.native) await wait(10);
-  assert.deepEqual(segments, [
-    [128000, 0, 127999],
-    [16000, 128000, 143999],
-  ]);
-  fs.rmSync(dir, { recursive: true, force: true });
-  stt.close();
+
+const { createSegmenter } = require("../src/segmenter.js");
+function tone(seconds, rate = 16000, level = 0.2) {
+  const out = new Float32Array(Math.round(seconds * rate));
+  for (let i = 0; i < out.length; i++) out[i] = level * Math.sin((2 * Math.PI * 220 * i) / rate);
+  return out;
+}
+const hush = (seconds, rate = 16000) => new Float32Array(Math.round(seconds * rate));
+function phrases(parts, options = {}) {
+  const seen = [];
+  const segmenter = createSegmenter({ rate: 16000, onSegment: (s) => seen.push(s.length / 16000), ...options });
+  // Feed in uneven blocks, as audio arrives in practice.
+  for (const part of parts) for (let i = 0; i < part.length; i += 1000) segmenter.push(part.subarray(i, i + 1000));
+  return { seen, segmenter };
+}
+test("live audio is cut into phrases at pauses, not fixed blocks", () => {
+  const { seen } = phrases([tone(2), hush(0.8), tone(1.5), hush(0.8)]);
+  assert.equal(seen.length, 2);
+  assert.ok(seen[0] >= 2 && seen[0] < 3, `first phrase ${seen[0]} s`);
+});
+test("a short answer ends after a longer pause, and silence alone sends nothing", () => {
+  assert.equal(phrases([tone(0.5), hush(0.8)]).seen.length, 0);
+  assert.equal(phrases([tone(0.5), hush(1.6)]).seen.length, 1);
+  assert.equal(phrases([hush(12)]).seen.length, 0);
+});
+test("a long stretch of speech is still cut every ten seconds", () => {
+  const { seen } = phrases([tone(25)]);
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every((s) => s <= 10.03)); // cut on a 30 ms frame boundary
+});
+test("stopping sends the speech that is left", () => {
+  const { seen, segmenter } = phrases([tone(1)]);
+  assert.equal(seen.length, 0);
+  segmenter.flush();
+  assert.equal(seen.length, 1);
 });

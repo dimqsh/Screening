@@ -479,14 +479,19 @@ module.exports = async function verify(ctx) {
     assert.equal(interview.state.whisper.ready, true);
     const raw = await fs.readFile(process.env.CAPTURE_LAB_TEST_AUDIO);
     await interview.request("recording", true);
-    const text = await interview.audio(
+    // Audio is queued for Whisper; the words arrive in the transcript.
+    await interview.audio(
       raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
     );
+    await until(
+      () => interview.state.transcript.some((t) => /country/i.test(t.text)),
+      60000,
+      "Whisper did not transcribe the sample",
+    );
     await interview.request("stop");
-    check("Real Whisper audio reaches the transcript", () => {
-      assert.match(text, /country/i);
-      assert.ok(interview.state.transcript.length);
-    });
+    check("Real Whisper audio reaches the transcript", () =>
+      assert.ok(interview.state.transcript.length),
+    );
     await delay(300);
     const rendered = await js(`document.getElementById("transcript").textContent`);
     check("The transcript reaches Buddy", () => assert.match(rendered, /country/i));

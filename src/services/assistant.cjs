@@ -108,9 +108,140 @@ Enabled notes (data): ${JSON.stringify(notes)}
 Conversation history (data): ${JSON.stringify(conversation)}
 Latest question or transcript (data): ${JSON.stringify(question)}`;
 }
+// Settings shared by every answer: no web, shell, apps, agents, skills or
+// project files. Only the supplied text and an optional image are used.
+const RUNTIME_CONFIG = [
+  'web_search="disabled"',
+  "features.shell_tool=false",
+  "features.unified_exec=false",
+  "features.apps=false",
+  "agents.enabled=false",
+  "skills.include_instructions=false",
+  "project_doc_max_bytes=0",
+  'model_reasoning_effort="low"',
+].flatMap((value) => ["-c", value]);
+// Items that would act on the computer or the web. An answer never needs one.
+const ACTIONS = new Set([
+  "commandExecution",
+  "fileChange",
+  "mcpToolCall",
+  "dynamicToolCall",
+  "collabAgentToolCall",
+  "webSearch",
+  "imageGeneration",
+  "subAgentActivity",
+]);
+
+// One long-running `codex app-server` streams each answer as it is written,
+// so the first words show in a few seconds instead of after the whole answer.
+class AnswerServer {
+  constructor(env) {
+    this.env = env;
+    this.child = null;
+    this.ready = null;
+    this.calls = new Map();
+    this.listeners = new Set();
+    this.models = [];
+    this.nextId = 0;
+  }
+  start() {
+    if (this.ready) return this.ready;
+    const child = spawn(binaryPath(), ["app-server", ...RUNTIME_CONFIG], {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "ignore"],
+      env: this.env(),
+    });
+    this.child = child;
+    let pending = "";
+    child.stdout.on("data", (data) => {
+      pending += data;
+      let i;
+      while ((i = pending.indexOf("\n")) !== -1) {
+        const line = pending.slice(0, i);
+        pending = pending.slice(i + 1);
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (message.method && message.id != null)
+          // Approvals, tool calls and input requests are always declined.
+          this.send({ id: message.id, error: { code: -32601, message: "Not supported" } });
+        else if (message.id != null) {
+          this.calls.get(message.id)?.(message);
+          this.calls.delete(message.id);
+        } else if (message.method)
+          for (const listener of this.listeners) listener(message);
+      }
+    });
+    const stopped = () => {
+      if (this.child !== child) return;
+      this.child = null;
+      this.ready = null;
+      for (const resolve of this.calls.values())
+        resolve({ error: { message: "The AI runtime stopped." } });
+      this.calls.clear();
+      for (const listener of this.listeners)
+        listener({ method: "runtime/stopped" });
+    };
+    child.once("error", stopped);
+    child.once("close", stopped);
+    this.ready = (async () => {
+      await this.call("initialize", {
+        clientInfo: { name: "screening", version: "1" },
+        capabilities: null,
+      });
+      this.send({ method: "initialized" });
+      const list = await this.call("model/list", {}).catch(() => ({}));
+      this.models = (list.data || list.models || []).filter((m) => !m.hidden);
+    })();
+    this.ready.catch(() => this.stop());
+    return this.ready;
+  }
+  send(message) {
+    this.child?.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+  call(method, params, timeout = 20000) {
+    if (!this.child) return Promise.reject(new Error("The AI runtime is not running."));
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.calls.delete(id);
+        reject(new Error("The AI runtime did not respond."));
+      }, timeout);
+      this.calls.set(id, (message) => {
+        clearTimeout(timer);
+        message.error
+          ? reject(new Error(message.error.message || "AI request failed"))
+          : resolve(message.result);
+      });
+      this.send({ id, method, params });
+    });
+  }
+  // Fast uses the plan's quick model (the "luna" family); Best keeps the default.
+  model(speed) {
+    if (speed !== "fast") return null;
+    return this.models.find((m) => /luna/i.test(m.id))?.id || null;
+  }
+  stop() {
+    const child = this.child;
+    this.child = null;
+    this.ready = null;
+    child?.kill();
+  }
+}
+
 class Assistant {
-  constructor(onChange) {
+  constructor(onChange, { home } = {}) {
     this.onChange = onChange;
+    // Screening keeps its own Codex sign-in and settings, apart from the
+    // person's Codex CLI and app, so their plugins, MCP servers, hooks and
+    // memories never run during an interview.
+    this.home = home;
+    if (home) fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    this.server = new AnswerServer(() => this.env());
+    this.turn = null;
     this.child = null;
     this.loginChild = null;
     this.state = {
@@ -126,6 +257,13 @@ class Assistant {
     Object.assign(this.state, patch);
     this.onChange?.(this.state);
   }
+  env() {
+    return this.home ? { ...process.env, CODEX_HOME: this.home } : process.env;
+  }
+  // Starting the runtime before the first question saves about a second.
+  warm() {
+    if (this.state.connected) this.server.start().catch(() => {});
+  }
   async status() {
     try {
       const result = await this.command(["login", "status"], 12000);
@@ -137,6 +275,7 @@ class Assistant {
           ? "Codex is signed in with an API key. Use ChatGPT sign-in to use your subscription."
           : null,
       });
+      if (connected) this.warm();
     } catch {
       this.update({ connected: false, status: "disconnected", error: null });
     }
@@ -147,6 +286,7 @@ class Assistant {
       const child = spawn(binaryPath(), args, {
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
+        env: this.env(),
       });
       let output = "";
       const timer = setTimeout(() => {
@@ -174,6 +314,7 @@ class Assistant {
     const child = spawn(binaryPath(), ["login"], {
       windowsHide: true,
       stdio: ["ignore", "ignore", "pipe"],
+      env: this.env(),
     });
     this.loginChild = child;
     const timer = setTimeout(() => child.kill(), 5 * 60 * 1000);
@@ -193,7 +334,8 @@ class Assistant {
     });
   }
   async answer(input) {
-    if (this.child) throw new Error("An answer is already being generated.");
+    if (this.child || this.turn)
+      throw new Error("An answer is already being generated.");
     if (!this.state.connected) throw new Error("Sign in with ChatGPT first.");
     const prompt = buildPrompt({ ...input, hasImage: Boolean(input.image) });
     if (
@@ -201,6 +343,114 @@ class Assistant {
       (!Buffer.isBuffer(input.image) || input.image.length > 8 * 1024 * 1024)
     )
       throw new Error("Invalid screenshot");
+    this.canceled = false;
+    let streamed;
+    try {
+      await this.server.start();
+      streamed = true;
+    } catch {
+      streamed = false;
+    }
+    return streamed
+      ? this.stream(prompt, input)
+      : this.answerOnce(prompt, input);
+  }
+  async stream(prompt, input) {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "screening-answer-"));
+    this.cwd = cwd;
+    const content = [{ type: "text", text: prompt, text_elements: [] }];
+    if (input.image) {
+      const imagePath = path.join(cwd, "selected-window.png");
+      fs.writeFileSync(imagePath, input.image, { mode: 0o600 });
+      content.push({ type: "localImage", path: imagePath });
+    }
+    this.update({ busy: true, answer: "", question: input.question, error: null });
+    const server = this.server;
+    let answer = "",
+      failure = null,
+      flushTimer = null,
+      unsubscribe = () => {};
+    const flush = () => {
+      flushTimer = null;
+      this.update({ answer });
+    };
+    try {
+      const model = server.model(input.speed);
+      const { thread } = await server.call("thread/start", {
+        ephemeral: true,
+        approvalPolicy: "never",
+        sandbox: "read-only",
+        cwd,
+        ...(model ? { model } : {}),
+      });
+      const turn = { threadId: thread.id, turnId: null };
+      this.turn = turn;
+      const done = new Promise((resolve) => {
+        const listener = (message) => {
+          const params = message.params || {};
+          if (message.method === "runtime/stopped") {
+            failure ??= "The AI runtime stopped. Try again.";
+            return resolve();
+          }
+          if (params.threadId !== turn.threadId) return;
+          if (message.method === "item/agentMessage/delta") {
+            answer += params.delta;
+            // Buddy redraws at most every 60 ms while the answer streams in.
+            flushTimer ??= setTimeout(flush, 60);
+          } else if (message.method === "item/started" && ACTIONS.has(params.item?.type)) {
+            failure = "Unexpected tool request was stopped.";
+            this.interrupt();
+          } else if (message.method === "error" && !params.willRetry) {
+            failure ??= params.error?.message || "AI request failed";
+          } else if (message.method === "turn/completed") {
+            if (params.turn?.status === "failed")
+              failure ??= params.turn.error?.message || "AI request failed";
+            resolve();
+          }
+        };
+        server.listeners.add(listener);
+        unsubscribe = () => server.listeners.delete(listener);
+      });
+      const started = await server.call("turn/start", {
+        threadId: thread.id,
+        input: content,
+        effort: "low",
+      });
+      turn.turnId = started.turn?.id || null;
+      if (this.canceled) this.interrupt();
+      const timer = setTimeout(() => {
+        failure ??= "Answer timed out. Try a shorter question.";
+        this.interrupt();
+      }, 90000);
+      await done;
+      clearTimeout(timer);
+    } catch (error) {
+      failure ??= error.message;
+    } finally {
+      unsubscribe();
+      clearTimeout(flushTimer);
+      this.turn = null;
+      fs.rmSync(cwd, { recursive: true, force: true });
+      this.cwd = null;
+    }
+    if (this.canceled) {
+      this.update({ busy: false, answer, error: null });
+      return answer;
+    }
+    if (!failure && !answer) failure = "No answer returned.";
+    this.update({ busy: false, answer, error: failure });
+    if (failure) throw new Error(failure);
+    return answer;
+  }
+  interrupt() {
+    const turn = this.turn;
+    if (turn?.turnId)
+      this.server
+        .call("turn/interrupt", { threadId: turn.threadId, turnId: turn.turnId })
+        .catch(() => {});
+  }
+  // The one-shot path, used only if the long-running runtime cannot start.
+  answerOnce(prompt, input) {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "screening-answer-"));
     this.cwd = cwd;
     // Ignore user plugins/MCP and disable action tools. Only supplied text and an optional selected image enter the request.
@@ -219,22 +469,7 @@ class Assistant {
       "--json",
       "-C",
       cwd,
-      "-c",
-      'web_search="disabled"',
-      "-c",
-      "features.shell_tool=false",
-      "-c",
-      "features.unified_exec=false",
-      "-c",
-      "features.apps=false",
-      "-c",
-      "agents.enabled=false",
-      "-c",
-      "skills.include_instructions=false",
-      "-c",
-      "project_doc_max_bytes=0",
-      "-c",
-      'model_reasoning_effort="low"',
+      ...RUNTIME_CONFIG,
       "-",
     ];
     if (input.image) {
@@ -252,9 +487,9 @@ class Assistant {
       const child = spawn(binaryPath(), args, {
         windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"],
+        env: this.env(),
       });
       this.child = child;
-      this.canceled = false;
       let pending = "",
         answer = "",
         failure = null,
@@ -333,12 +568,14 @@ class Assistant {
     });
   }
   cancel() {
-    if (this.child) {
-      this.canceled = true;
-      this.child.kill();
-    }
+    if (!this.state.busy) return;
+    // A turn that has not started yet is interrupted as soon as it does.
+    this.canceled = true;
+    this.interrupt();
+    this.child?.kill();
   }
   close() {
+    this.server.stop();
     this.child?.kill();
     this.loginChild?.kill();
     if (this.cwd) {

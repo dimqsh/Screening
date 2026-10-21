@@ -3,6 +3,7 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 const { SPEECH_MODEL } = require("./speech-model.cjs");
+const { createSegmenter } = require("../segmenter.js");
 // Whisper runs in a worker thread that is loaded only while it is needed:
 // listening keeps it warm, and it unloads after a quiet period. A loaded model
 // holds 0.7 GB (fast) to 2.4 GB (accurate), so an idle app should not keep it.
@@ -164,6 +165,39 @@ class Transcription {
     });
     return true;
   }
+  // Live audio arrives phrase by phrase. While Whisper works on one phrase,
+  // the next ones wait together, so a slower Mac gets longer pieces instead
+  // of falling behind.
+  feed(samples, language = "auto") {
+    if (this.waiting) {
+      const merged = new Float32Array(this.waiting.length + samples.length);
+      merged.set(this.waiting);
+      merged.set(samples, this.waiting.length);
+      this.waiting = merged;
+    } else this.waiting = samples;
+    this.waitingLanguage = language;
+    // Never more than Whisper's 30-second window in one piece.
+    if (this.waiting.length > 16000 * 28) {
+      const full = this.waiting;
+      this.waiting = null;
+      this.send(full, language);
+    }
+    this.drain();
+  }
+  drain() {
+    if (this.feeding || !this.waiting) return;
+    const samples = this.waiting;
+    this.waiting = null;
+    this.feeding = this.send(samples, this.waitingLanguage).finally(() => {
+      this.feeding = null;
+      this.drain();
+    });
+  }
+  send(samples, language) {
+    return this.transcribe(samples, language).catch((e) =>
+      this.update({ error: e.message }),
+    );
+  }
   transcribe(samples, language = "auto") {
     if (!this.state.ready)
       return Promise.reject(new Error("Download/load Whisper first."));
@@ -199,13 +233,14 @@ class Transcription {
       throw new Error("Native audio requires macOS");
     if (!this.state.ready) throw new Error("Load Whisper first.");
     if (this.native) throw new Error("Recording already started.");
-    // The helper writes a small block per audio device cycle. Blocks are kept
-    // as they come and joined once per 8 s segment, not on every block.
-    let parts = [],
-      size = 0,
+    let leftover = Buffer.alloc(0),
       diagnostic = "",
       ready = false,
       lastLevelAt = 0;
+    const segmenter = createSegmenter({
+      rate: 16000,
+      onSegment: (phrase) => this.feed(phrase, language),
+    });
     const child = spawn(helper, [], { stdio: ["ignore", "pipe", "pipe"] });
     this.native = child;
     this.update({ recording: false, source: "system", error: null });
@@ -234,21 +269,12 @@ class Transcription {
           );
           lastLevelAt = Date.now();
         }
-        parts.push(chunk);
-        size += chunk.length;
-        const bytes = 16000 * 8 * 4;
-        if (size < bytes) return;
-        let data = Buffer.concat(parts, size);
-        while (data.length >= bytes) {
-          const segment = data.subarray(0, bytes);
-          data = data.subarray(bytes);
-          this.transcribe(
-            new Float32Array(new Uint8Array(segment).buffer),
-            language,
-          ).catch((e) => this.update({ error: e.message }));
-        }
-        parts = data.length ? [data] : [];
-        size = data.length;
+        // Samples are 4-byte floats; a chunk can end in the middle of one.
+        const bytes = Buffer.concat([leftover, chunk]);
+        const whole = bytes.length - (bytes.length % 4);
+        leftover = bytes.subarray(whole);
+        if (whole)
+          segmenter.push(new Float32Array(new Uint8Array(bytes.subarray(0, whole)).buffer));
       });
       child.stderr.on("data", (chunk) => {
         diagnostic = (diagnostic + chunk).slice(-4000);
@@ -268,13 +294,7 @@ class Transcription {
       child.once("close", (code) => {
         clearTimeout(timer);
         this.native = null;
-        const data = Buffer.concat(parts, size);
-        if (data.length >= 16000 * 4) {
-          const copy = new Uint8Array(
-            data.subarray(0, data.length - (data.length % 4)),
-          ).buffer;
-          this.transcribe(new Float32Array(copy), language).catch(() => {});
-        }
+        segmenter.flush();
         const message =
           diagnostic.replace("SCREENING_AUDIO_READY", "").trim().slice(-400) ||
           "Call audio stopped. Check Screening under System Audio Recording Only in Privacy & Security.";
@@ -305,6 +325,7 @@ class Transcription {
   }
   clear() {
     this.generation++;
+    this.waiting = null;
   }
   close() {
     this.cancelUnload();

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs or updates Screening on a Mac, Apple silicon or Intel:
+# Installs or updates Screening on a Mac (Apple silicon or Intel):
 #   curl -fsSL https://raw.githubusercontent.com/dimqsh/Screening/main/install.sh | bash
 set -euo pipefail
 
@@ -10,17 +10,26 @@ if [ "$(uname -s)" != "Darwin" ]; then
   echo "This installer is for macOS. On Windows, run the .exe from $RELEASES"
   exit 1
 fi
-# A shell under Rosetta reports x86_64 on Apple silicon; ask the hardware.
-if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
-  arch=arm64
+# A Terminal running under Rosetta reports x86_64 on Apple silicon.
+if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+  arch="arm64"
 else
-  arch=x64
+  arch="x64"
 fi
 
-echo "Finding the newest Screening for $arch…"
-url=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=20" |
-  grep -o "\"browser_download_url\": *\"[^\"]*mac-$arch\\.dmg\"" |
-  head -n 1 | sed -E 's/.*"(https[^"]+)"$/\1/')
+echo "Finding the newest Screening…"
+# The latest release's page redirects to its tag; this needs no API quota.
+tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$RELEASES/latest" | sed -E 's#.*/tag/##') || true
+url=""
+if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  url="$RELEASES/download/$tag/Screening-${tag#v}-mac-$arch.dmg"
+  curl -fsSI -o /dev/null "$url" || url=""
+fi
+if [ -z "$url" ]; then
+  url=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=20" |
+    grep -o "\"browser_download_url\": *\"[^\"]*mac-$arch\\.dmg\"" |
+    head -n 1 | sed -E 's/.*"(https[^"]+)"$/\1/') || true
+fi
 if [ -z "$url" ]; then
   echo "No Mac download found. See $RELEASES"
   exit 1

@@ -69,11 +69,13 @@ class WindowCapture {
         quality: "best",
       });
     const title = typeof name === "string" ? name.trim().slice(0, 200) : "";
-    return attachment(image, title || "Window");
+    // A frame that needed no resizing is already the PNG to send; encoding
+    // it again blocked the main process for 44-227 ms at 1600x1000.
+    return attachment(image, title || "Window", scale < 1 ? undefined : dataUrl);
   }
 }
 
-function attachment(image, name) {
+function attachment(image, name, dataUrl) {
   const size = image.getSize();
   if (size.width < 40 || size.height < 40)
     throw new Error(
@@ -81,7 +83,7 @@ function attachment(image, name) {
     );
   return {
     name,
-    dataUrl: image.toDataURL(),
+    dataUrl: dataUrl ?? image.toDataURL(),
     // Buddy shows this small copy; only ChatGPT gets the full image.
     preview: `data:image/jpeg;base64,${image.resize({ width: 240 }).toJPEG(75).toString("base64")}`,
     width: size.width,

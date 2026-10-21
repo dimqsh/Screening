@@ -1,6 +1,6 @@
 {
   "name": "screening",
-  "version": "0.7.1",
+  "version": "0.7.4",
   "description": "Interview answers at your MacBook notch, right under your camera. Local Whisper, ChatGPT answers, hidden from screen sharing.",
   "main": "src/main.cjs",
   "private": true,
@@ -9,6 +9,7 @@
     "build:native": "node scripts/build-native.cjs",
     "verify": "electron . --verify",
     "verify:capture": "electron . --verify --capture-test",
+    "verify:protected": "node scripts/build-native.cjs --presentation-tests && electron . --verify --protected-test --capture-test",
     "package:mac": "npm run build:native && node scripts/prepare-runtime.cjs && electron-builder --mac dmg --arm64 --publish never",
     "test": "node --test test/unit.test.cjs test/buddy.test.cjs",
     "package:win": "node scripts/prepare-runtime.cjs && electron-builder --win nsis --x64 --publish never",
@@ -17,7 +18,8 @@
   },
   "devDependencies": {
     "electron": "40.10.6",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "node-api-headers": "1.9.0"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
@@ -59,6 +61,7 @@
       }
     ],
     "mac": {
+      "minimumSystemVersion": "14.0",
       "target": [
         "dmg"
       ],
@@ -80,7 +83,9 @@
             "capture-sck",
             "audio-sck",
             "audio-tap",
-            "notch-info"
+            "notch-info",
+            "protected-presentation.node",
+            "capture-cgdisplay"
           ]
         }
       ],

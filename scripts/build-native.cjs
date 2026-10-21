@@ -27,3 +27,37 @@ for (const [helper, macos] of Object.entries(helpers))
     ],
     { stdio: "inherit" },
   );
+execFileSync("xcrun", [
+  "clang++", "-std=c++17", "-O2", "-fobjc-arc", "-bundle",
+  "-undefined", "dynamic_lookup", "-DNAPI_VERSION=8",
+  "-target", `${arch}-apple-macosx14.0`,
+  "-I", require("node-api-headers").include_dir,
+  "-framework", "AppKit", "-framework", "AVFoundation",
+  "-framework", "QuartzCore", "-framework", "CoreMedia", "-framework", "CoreVideo",
+  path.join(__dirname, "protected-presentation.mm"),
+  "-o", path.join(root, "bin", "protected-presentation.node"),
+], { stdio: "inherit" });
+if (process.argv.includes("--presentation-tests")) {
+  execFileSync("xcrun", [
+    "clang++", "-std=c++17", "-O2", "-fobjc-arc", "-bundle",
+    "-undefined", "dynamic_lookup", "-DNAPI_VERSION=8",
+    "-target", `${arch}-apple-macosx14.0`,
+    "-I", require("node-api-headers").include_dir, "-framework", "AppKit",
+    path.join(root, "test", "native-input.mm"),
+    "-o", path.join(root, "bin", "presentation-input-test.node"),
+  ], { stdio: "inherit" });
+  execFileSync("xcrun", [
+    "clang", "-O2", "-fobjc-arc", "-fblocks",
+    "-target", `${arch}-apple-macosx14.0`, "-framework", "AppKit",
+    path.join(root, "test", "fullscreen-host.m"),
+    "-o", path.join(root, "bin", "presentation-fullscreen-test"),
+  ], { stdio: "inherit" });
+}
+execFileSync("xcrun", [
+  "clang", "-O2", "-fobjc-arc", "-fblocks", "-Wno-deprecated-declarations",
+  "-target", `${arch}-apple-macosx14.0`,
+  "-framework", "AppKit", "-framework", "CoreGraphics",
+  "-framework", "CoreVideo", "-framework", "IOSurface",
+  path.join(__dirname, "capture-cgdisplay.m"),
+  "-o", path.join(root, "bin", "capture-cgdisplay"),
+], { stdio: "inherit" });

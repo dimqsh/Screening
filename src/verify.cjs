@@ -675,9 +675,11 @@ module.exports = async function verify(ctx) {
   }
 
   const captureResults = [];
+  if (has("--protected-test")) await require("./verify-protected.cjs")(ctx);
   if (has("--capture-test")) {
     captureResults.push(await runCapture("electron"));
     if (process.platform === "darwin") captureResults.push(await runCapture("sck"));
+    if (process.platform === "darwin") captureResults.push(await runCapture("cgdisplay"));
     // The menu bar as screen capture sees it: the icon is there, Buddy is not.
     const display = screen.getPrimaryDisplay();
     if (process.platform === "darwin") {
@@ -714,6 +716,11 @@ module.exports = async function verify(ctx) {
   check("Buddy and the engine ran without script errors", () =>
     assert.deepEqual(scriptErrors, []),
   );
+  if (has("--capture-test"))
+    for (const result of captureResults)
+      check(`Capture exclusion: ${result.capturePath || result.outcome}`, () =>
+        assert.equal(result.outcome, "excluded", result.detail),
+      );
   await fs.writeFile(
     path.join(artifactDir, "verification.json"),
     JSON.stringify(

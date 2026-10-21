@@ -43,6 +43,7 @@ if (verification)
 
 // Buddy is the only visible window. The engine is a hidden audio host.
 let buddy,
+  buddyPresentation,
   engine,
   tray,
   interview,
@@ -215,6 +216,10 @@ function helperPath(name) {
 }
 function syncBuddy() {
   if (!alive(buddy)) return;
+  if (buddyPresentation?.failed) {
+    buddy.hide();
+    return;
+  }
   const show = buddyShown();
   if (show && !buddy.isVisible()) buddy.showInactive();
   else if (!show && buddy.isVisible()) {
@@ -223,6 +228,7 @@ function syncBuddy() {
     // Return with clicks passing through, whatever the pointer was doing.
     buddy.setIgnoreMouseEvents(true, { forward: true });
   }
+  buddyPresentation?.sync(show);
 }
 let placedBounds = null;
 function setBuddyBounds(bounds) {
@@ -309,18 +315,26 @@ function takeKeyboard() {
   buddy.setFocusable(true);
   keyboard.taken++;
   keyboard.focusableOnTake = buddy.isFocusable();
-  buddy.focus();
-  buddy.webContents.focus();
+  // makeKeyAndOrderFront in Electron's panel focus path can stall subsequent
+  // resized capturePage frames. The protected companion already owns stacking.
+  if (buddyPresentation) buddyPresentation.takeKeyboard();
+  else {
+    buddy.focus();
+    buddy.webContents.focus();
+  }
 }
 function releaseKeyboard() {
   if (!alive(buddy) || !buddy.isFocusable()) return;
   keyboard.released++;
   const focused = buddy.isFocused();
   buddy.setFocusable(false);
-  // Hiding for a moment hands key status back to the app underneath.
+  // Release key status without disturbing the protected companion's display.
   if (focused && buddy.isVisible()) {
-    buddy.hide();
-    buddy.showInactive();
+    if (buddyPresentation) buddyPresentation.releaseKeyboard();
+    else {
+      buddy.hide();
+      buddy.showInactive();
+    }
   }
 }
 
@@ -342,6 +356,7 @@ function change(key, value) {
 function apply() {
   for (const win of [buddy, engine])
     if (alive(win)) win.setContentProtection(state.protection);
+  buddyPresentation?.setProtection(state.protection);
   publish();
 }
 
@@ -411,7 +426,7 @@ function markerPixels(image) {
   return count;
 }
 async function cropCapture(display, target, capturePath) {
-  if (capturePath === "sck") {
+  if (capturePath === "sck" || capturePath === "cgdisplay") {
     if (process.platform !== "darwin")
       throw new Error("ScreenCaptureKit requires macOS.");
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), "capture-lab-roi-"));
@@ -419,7 +434,7 @@ async function cropCapture(display, target, capturePath) {
     const bounds = target.getBounds();
     try {
       await execFile(
-        helperPath("capture-sck"),
+        helperPath(capturePath === "sck" ? "capture-sck" : "capture-cgdisplay"),
         [
           String(display.id),
           String(bounds.x - display.bounds.x),
@@ -505,12 +520,28 @@ async function runCapture(capturePath = "electron") {
     buddy.setIgnoreMouseEvents(false);
     buddy.showInactive();
     buddy.moveTop();
+    const prepareSyntheticContent = () => buddy.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 3000;
+        const check = () => {
+          if (!document.getElementById('test-view').hidden &&
+              document.getElementById('island').hidden)
+            requestAnimationFrame(() => requestAnimationFrame(resolve));
+          else if (Date.now() > deadline) reject(new Error('Synthetic card did not render.'));
+          else setTimeout(check, 20);
+        };
+        check();
+      })
+    `);
+    if (buddyPresentation) await buddyPresentation.prepareCaptureTest(prepareSyntheticContent);
+    else await prepareSyntheticContent();
     // Only Buddy, showing a synthetic card, is briefly unprotected.
     buddy.setContentProtection(false);
     await delay(1100);
     const baseline = await cropCapture(display, buddy, capturePath),
       baselineCount = markerPixels(baseline);
     buddy.setContentProtection(true);
+    buddyPresentation?.setProtection(true);
     await delay(1100);
     const protectedImage = await cropCapture(display, buddy, capturePath),
       protectedCount = markerPixels(protectedImage);
@@ -536,7 +567,9 @@ async function runCapture(capturePath = "electron") {
             ? "Buddy disappeared from this capture path. Check what the other person sees in your meeting app."
             : "The capture changed, but the result was ambiguous.",
       capturePath:
-        capturePath === "sck"
+        capturePath === "cgdisplay"
+          ? "Apple CGDisplayStream, independent process, synthetic window ROI"
+          : capturePath === "sck"
           ? "Apple ScreenCaptureKit SCStream, no excluded windows, synthetic window ROI"
           : "Electron desktopCapturer full-display thumbnail cropped to synthetic window bounds",
       baseline: baseline.toDataURL(),
@@ -565,7 +598,7 @@ async function runCapture(capturePath = "electron") {
 }
 async function captureTest() {
   const paths =
-    process.platform === "darwin" ? ["electron", "sck"] : ["electron"];
+    process.platform === "darwin" ? ["electron", "sck", "cgdisplay"] : ["electron"];
   const results = [];
   for (const capturePath of paths) results.push(await runCapture(capturePath));
   const hidden = results.every((r) => r.outcome === "excluded");
@@ -578,7 +611,8 @@ async function captureTest() {
     detail: results
       .map(
         (r) =>
-          `${r.capturePath?.startsWith("Apple") ? "ScreenCaptureKit" : "Screen capture"}: ${r.detail}`,
+          `${r.capturePath?.includes("CGDisplayStream") ? "CGDisplayStream" :
+            r.capturePath?.startsWith("Apple") ? "ScreenCaptureKit" : "Screen capture"}: ${r.detail}`,
       )
       .join("\n\n"),
   });
@@ -728,7 +762,19 @@ app
     );
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
-        { label: "Screening", submenu: [{ role: "quit" }] },
+        {
+          label: "Screening",
+          submenu: [
+            { label: "Show Buddy", click: ask },
+            { type: "separator" },
+            {
+              label: "Test Screen Sharing Protection…",
+              click: attempt(captureTest),
+            },
+            { type: "separator" },
+            { role: "quit" },
+          ],
+        },
         { role: "editMenu" },
       ]),
     );
@@ -768,6 +814,12 @@ app
     buddy.setIgnoreMouseEvents(true, { forward: true });
     if (process.platform === "darwin")
       buddy.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (process.platform === "darwin") {
+      buddyPresentation = require("./services/protected-presentation.cjs").protectPresentation(
+        buddy, helperPath("protected-presentation.node"), report,
+      );
+      buddyPresentation.setProtection(state.protection);
+    }
     buddy.on("close", (event) => {
       if (!quitting) {
         event.preventDefault();
@@ -793,6 +845,7 @@ app
         windowCapture:
           new (require("./services/window-capture.cjs").WindowCapture)(() => [
             buddy.getMediaSourceId(),
+            ...(buddyPresentation ? [buddyPresentation.getMediaSourceId()] : []),
             engine.getMediaSourceId(),
           ]),
         getNotes: () => state.notes,
@@ -915,11 +968,13 @@ app
       ),
     );
     publish();
+    if (!verification) ask();
     if (verification) {
       await delay(800);
       await require("./verify.cjs")({
         app,
         buddy,
+        buddyPresentation,
         engine,
         tray,
         interview,
@@ -948,6 +1003,7 @@ app
   });
 app.on("before-quit", () => {
   quitting = true;
+  buddyPresentation?.stop();
   audioRouting?.close();
   interview?.close();
 });
@@ -955,5 +1011,5 @@ app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => app.quit());
 for (const event of ["activate", "second-instance"])
   app.on(event, () => {
-    if (alive(buddy)) setHidden(false);
+    if (alive(buddy)) ask();
   });

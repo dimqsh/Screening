@@ -82,6 +82,14 @@ Audio, transcripts, answers, notes and snapshots stay in memory and are not save
 
 Buddy asks the operating system to leave it out of screen capture before it first appears. **Test Screen Sharing Protection** in the menu shows a synthetic card in Buddy and compares a magenta marker with protection off and on, on each capture path the system offers. A missing unprotected marker counts as inconclusive. Always check what the other person sees in your meeting app.
 
+On macOS 14+, Buddy presents its pixels through a native `AVSampleBufferDisplayLayer` with `preventsCapture` enabled. A dedicated layer-hosting NSView owns this layer directly: the layer is assigned before enabling `wantsLayer`, without an intermediate AppKit backing layer. Its original Chromium view remains in place for input, with its ordinary drawing suppressed. The protected companion follows Buddy's position and visibility and passes mouse events through. Frames stay in memory; this does not record the desktop. A presentation failure hides Buddy instead of falling back to unprotected drawing.
+
+The macOS test includes an independent `CGDisplayStream` recorder in addition to Electron and ScreenCaptureKit. Before the test turns protection off, it waits for the synthetic card and discards the previous presentation layer and its queued images.
+
+Capture tests cannot prove visibility on the physical display. Check Buddy locally as well: open it, use **Keep open**, select **Notes**, and type. The automated native input test exercises mouse hit testing, text insertion, selection, hide/show and resizing; physical visibility is a separate manual check.
+
+On the tested macOS 27.0.1 system, the earlier AppKit-backed companion disappeared locally during Telegram calls. After switching to the dedicated layer-hosting view, the user confirmed that the labeled source preview stayed visible and accepted text in an open Telegram call. This is local physical verification, not a guarantee for every OS or meeting app. Native visible/ready flags and the fullscreen Space lifecycle test alone cannot establish physical visibility.
+
 Historical results: version 0.1.0 was tested with Google Meet sharing the whole built-in screen on macOS 27.0.1 and Chrome 155. Two connections joined from the same Mac showed the overlay with protection off and left it out with protection on. That was not a second physical device. Version 0.6.0 ran the A/B check on macOS 27: with protection on, both the Electron and the ScreenCaptureKit paths dropped Buddy’s marker. No private meeting screenshots are included in this repository.
 
 The test captures the screen itself, so it is the one feature that asks for screen recording on macOS 15.
@@ -90,7 +98,7 @@ Capture exclusion is not a universal bypass. Electron documents that newer macOS
 
 ## Development
 
-Node.js 22+ and npm. Xcode command-line tools compile the macOS helpers: window capture, call audio (a Core Audio tap, and ScreenCaptureKit for macOS before 14.2) and notch geometry.
+Node.js 22+ and npm; macOS 14+ for the Mac app. Xcode command-line tools compile the macOS helpers and the N-API protected presentation module.
 
 ```sh
 npm ci
@@ -99,6 +107,7 @@ npm start
 npm test
 npm run verify
 npm run verify:capture # needs screen permission; shows a synthetic marker
+npm run verify:protected # macOS native input/lifecycle and continuous CGDisplayStream checks
 npm run package:mac # Apple Silicon DMG, on macOS
 npm run package:win # x64 NSIS EXE, on Windows
 ```

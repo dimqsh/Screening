@@ -428,7 +428,11 @@ class Assistant {
       unsubscribe();
       clearTimeout(flushTimer);
       this.turn = null;
-      fs.rmSync(cwd, { recursive: true, force: true });
+      // Windows can still hold the image here (EBUSY); retry in the background
+      // instead of turning a finished answer into an error.
+      fs.promises
+        .rm(cwd, { recursive: true, force: true, maxRetries: 3 })
+        .catch(() => {});
       this.cwd = null;
     }
     if (this.canceled) {
@@ -536,7 +540,11 @@ class Assistant {
         finished = true;
         clearTimeout(timer);
         this.child = null;
-        fs.rmSync(cwd, { recursive: true, force: true });
+        // Windows can still hold a file here (EBUSY); retry in the background
+        // instead of throwing out of this close handler.
+        fs.promises
+          .rm(cwd, { recursive: true, force: true, maxRetries: 3 })
+          .catch(() => {});
         this.cwd = null;
         if (this.canceled) {
           this.update({ busy: false, error: null });

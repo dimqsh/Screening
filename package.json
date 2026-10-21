@@ -4,11 +4,15 @@
   "description": "Interview answers at your MacBook notch, right under your camera. Local Whisper, ChatGPT answers, hidden from screen sharing.",
   "main": "src/main.cjs",
   "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "start": "electron .",
     "build:native": "node scripts/build-native.cjs",
     "verify": "electron . --verify",
     "verify:capture": "electron . --verify --capture-test",
+    "verify:protected": "node scripts/build-native.cjs --presentation-tests && electron . --verify --protected-test --capture-test",
     "package:mac": "node scripts/build-native.cjs arm64 && node scripts/prepare-runtime.cjs arm64 && electron-builder --mac dmg --arm64 --publish never",
     "package:mac:x64": "node scripts/build-native.cjs x64 && node scripts/prepare-runtime.cjs x64 && electron-builder --mac dmg --x64 --publish never",
     "test": "node --test test/unit.test.cjs test/buddy.test.cjs test/live-speech.test.cjs",
@@ -18,7 +22,8 @@
   },
   "devDependencies": {
     "electron": "40.10.6",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "node-api-headers": "1.9.0"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
@@ -45,7 +50,8 @@
       "assets/models/**/*",
       "assets/licenses/**/*",
       "assets/brand/**/*",
-      "assets/tray/**/*"
+      "assets/tray/**/*",
+      "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.*.*.*.dylib"
     ],
     "asar": true,
     "asarUnpack": [
@@ -64,8 +70,12 @@
       }
     ],
     "mac": {
+      "minimumSystemVersion": "14.0",
       "target": [
         "dmg"
+      ],
+      "electronLanguages": [
+        "en"
       ],
       "category": "public.app-category.productivity",
       "identity": null,
@@ -87,14 +97,16 @@
             "audio-sck",
             "audio-tap",
             "notch-info",
-            "live-speech"
+            "live-speech",
+            "protected-presentation.node"
           ]
         }
       ],
       "icon": "assets/icon.png"
     },
     "dmg": {
-      "sign": false
+      "sign": false,
+      "format": "ULFO"
     },
     "win": {
       "target": [

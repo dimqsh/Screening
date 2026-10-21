@@ -1,0 +1,4 @@
+# The same line endings on every platform, whatever core.autocrlf says.
+* text=auto eol=lf
+*.png binary
+*.onnx binary

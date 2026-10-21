@@ -184,6 +184,8 @@ async function createInterview(
       /* Setup offers the download. */
     }
   }
+  // The account check runs while the model files and Apple's languages are read.
+  const aiChecked = ai.status();
   await markIfDownloaded();
   // What Apple offers for the speech language decides whether setup still
   // needs Whisper, so Buddy's first look waits for it, up to 5 seconds.
@@ -194,7 +196,7 @@ async function createInterview(
       install: settings.speechEngine === "apple" && !whisper.state.ready,
     })
     .catch(() => {});
-  await ai.status();
+  await aiChecked;
   await Promise.race([
     liveChecked,
     new Promise((resolve) => setTimeout(resolve, 5000).unref()),

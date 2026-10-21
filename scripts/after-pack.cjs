@@ -82,7 +82,8 @@ module.exports = async function (context) {
   );
   const signing = certificate();
   if (signing) signWith(bundle, signing);
-  else if (process.env.GITHUB_ACTIONS)
+  // CI check builds opt in to an ad-hoc signature; release builds never set it.
+  else if (process.env.GITHUB_ACTIONS && process.env.SCREENING_ADHOC_SIGN !== "1")
     // A release signed differently would make every user allow access again.
     throw new Error(
       "Set the SCREENING_SIGN_P12 and SCREENING_SIGN_PASSWORD secrets to sign the release.",

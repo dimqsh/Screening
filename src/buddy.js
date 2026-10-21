@@ -963,10 +963,16 @@ async function pickWithSystem() {
     canvas.width = Math.round(video.videoWidth * scale);
     canvas.height = Math.round(video.videoHeight * scale);
     canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-    await api.request("window-image", {
-      name: track.label,
-      dataUrl: canvas.toDataURL("image/png"),
+    // toDataURL encoded the PNG in one task that blocked Buddy for 26-154 ms
+    // on a 1600x1000 window; toBlob encodes asynchronously.
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
     });
+    await api.request("window-image", { name: track.label, dataUrl });
     startTyping(input);
   } finally {
     stream.getTracks().forEach((t) => t.stop());

@@ -48,7 +48,9 @@ window.audioCapture = (() => {
       stream =
         kind === "system"
           ? await navigator.mediaDevices.getDisplayMedia({
-              video: true,
+              // Windows loopback audio comes with a screen video track that
+              // nothing reads; keep its capture at one small frame a second.
+              video: { width: { max: 320 }, height: { max: 240 }, frameRate: { max: 1 } },
               audio: true,
             })
           : await navigator.mediaDevices.getUserMedia({

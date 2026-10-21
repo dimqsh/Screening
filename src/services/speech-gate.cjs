@@ -46,8 +46,10 @@ class SpeechGate {
         consecutive++;
         longest = Math.max(longest, consecutive);
       } else consecutive = 0;
+      // Both counts only grow, so the rest of the chunk cannot change this.
+      if (voiced >= 8 && longest >= 4) return true;
     }
-    return voiced >= 8 && longest >= 4;
+    return false;
   }
 }
 module.exports = { SpeechGate };

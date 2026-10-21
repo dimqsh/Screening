@@ -70,6 +70,9 @@ const state = {
 };
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const alive = (win) => win && !win.isDestroyed();
+// On macOS each Buddy window draws through its own protected display.
+const presentations = new WeakMap();
+const buddyPresentation = () => presentations.get(buddy);
 const permission = () =>
   process.platform === "darwin"
     ? systemPreferences.getMediaAccessStatus("screen")
@@ -77,8 +80,9 @@ const permission = () =>
 const buddyShown = () => (state.testing ? true : !state.hidden);
 // Microphone and call-audio access on macOS. Call audio uses a Core Audio
 // tap, whose permission only the tap helper can read, so that answer is
-// cached and re-read in the background at most every 15 seconds. Before
-// macOS 14.2 call audio goes through ScreenCaptureKit and screen recording.
+// cached and re-read in the background at most every 15 seconds, or every
+// five minutes once it is granted. Before macOS 14.2 call audio goes
+// through ScreenCaptureKit and screen recording.
 let accessCache = null;
 let callAudio = { status: "not-determined", at: 0, reading: null };
 function readCallAudio() {
@@ -99,7 +103,8 @@ function readCallAudio() {
 function access() {
   if (process.platform !== "darwin") return null;
   if (accessCache && Date.now() - accessCache.at < 2000) return accessCache.value;
-  if (Date.now() - callAudio.at > 15000) readCallAudio();
+  const maxAge = callAudio.status === "granted" ? 300000 : 15000;
+  if (Date.now() - callAudio.at > maxAge) readCallAudio();
   const value = {
     microphone: systemPreferences.getMediaAccessStatus("microphone"),
     audio: hasAudioTap() ? callAudio.status : permission(),
@@ -216,6 +221,10 @@ function helperPath(name) {
 function syncBuddy() {
   // A new Buddy window stays hidden until it has drawn; see replaceBuddy.
   if (!alive(buddy) || retiring.length) return;
+  if (buddyPresentation()?.failed) {
+    buddy.hide();
+    return;
+  }
   const show = buddyShown();
   if (show && !buddy.isVisible()) buddy.showInactive();
   else if (!show && buddy.isVisible()) {
@@ -224,6 +233,34 @@ function syncBuddy() {
     // Return with clicks passing through, whatever the pointer was doing.
     buddy.setIgnoreMouseEvents(true, { forward: true });
   }
+  buddyPresentation()?.sync(show);
+}
+// The camera housing of a display never moves, so the helper runs once per
+// display: a new display or resolution gets its own run. Callers share one
+// pending run.
+let notchCache = null;
+function notchFor(display) {
+  const key = `${display.id}:${display.bounds.width}x${display.bounds.height}@${display.scaleFactor}`;
+  if (notchCache?.key !== key)
+    notchCache = {
+      key,
+      notch: notchGeometry.detectNotch({
+        display,
+        helper: process.platform === "darwin" ? helperPath("notch-info") : null,
+        run: execFile,
+      }),
+    };
+  return notchCache.notch;
+}
+// Display changes arrive in bursts (a resolution change sends several);
+// Buddy is placed once they settle.
+let displayChangeTimer = null;
+function placeAfterDisplayChange() {
+  clearTimeout(displayChangeTimer);
+  displayChangeTimer = setTimeout(
+    () => placeBuddy().then(publish).catch(console.error),
+    150,
+  );
 }
 let placedBounds = null;
 function setBuddyBounds(bounds) {
@@ -243,11 +280,7 @@ async function placeBuddy() {
     return placed.window;
   }
   const display = screen.getPrimaryDisplay();
-  const notch = await notchGeometry.detectNotch({
-    display,
-    helper: process.platform === "darwin" ? helperPath("notch-info") : null,
-    run: execFile,
-  });
+  const notch = await notchFor(display);
   const placed = notchGeometry.islandLayout({ display, notch });
   buddyLayout = placed.layout;
   if (alive(buddy) && !state.testing) setBuddyBounds(placed.window);
@@ -310,18 +343,26 @@ function takeKeyboard() {
   buddy.setFocusable(true);
   keyboard.taken++;
   keyboard.focusableOnTake = buddy.isFocusable();
-  buddy.focus();
-  buddy.webContents.focus();
+  // makeKeyAndOrderFront in Electron's panel focus path can stall subsequent
+  // resized capturePage frames. The protected companion already owns stacking.
+  if (buddyPresentation()) buddyPresentation().takeKeyboard();
+  else {
+    buddy.focus();
+    buddy.webContents.focus();
+  }
 }
 function releaseKeyboard() {
   if (!alive(buddy) || !buddy.isFocusable()) return;
   keyboard.released++;
   const focused = buddy.isFocused();
   buddy.setFocusable(false);
-  // Hiding for a moment hands key status back to the app underneath.
+  // Release key status without disturbing the protected companion's display.
   if (focused && buddy.isVisible()) {
-    buddy.hide();
-    buddy.showInactive();
+    if (buddyPresentation()) buddyPresentation().releaseKeyboard();
+    else {
+      buddy.hide();
+      buddy.showInactive();
+    }
   }
 }
 
@@ -343,6 +384,7 @@ function change(key, value) {
 function apply() {
   for (const win of [buddy, engine])
     if (alive(win)) win.setContentProtection(state.protection);
+  buddyPresentation()?.setProtection(state.protection);
   if (
     process.platform === "darwin" &&
     !state.protection &&
@@ -354,8 +396,9 @@ function apply() {
 }
 // macOS 27 keeps a window hidden from screen sharing once it was hidden,
 // unless Screening may record the screen. A new window starts out visible, so
-// Buddy moves to one. The old window stays up until the new one has drawn.
-// The engine is never shown, so it keeps its window.
+// Buddy moves to one, with a new protected display that starts out visible
+// too. The old window stays up until the new one has drawn. The engine is
+// never shown, so it keeps its window.
 let retiring = [];
 // Buddy's page reports what it knows (see buddy.js), so a new window can start there.
 let buddyMemory = null;
@@ -382,7 +425,14 @@ function replaceBuddy() {
     publish();
   };
   const timer = setTimeout(() => settle(false), 8000);
-  next.once("ready-to-show", () => settle(true));
+  // On macOS the page has drawn once its protected display has a frame.
+  Promise.all([
+    new Promise((resolve) => next.once("ready-to-show", resolve)),
+    presentations.get(next)?.ready,
+  ]).then(
+    () => settle(true),
+    () => settle(false),
+  );
   next.webContents.once("did-fail-load", () => settle(false));
   next.webContents.once("render-process-gone", () => settle(false));
 }
@@ -424,7 +474,10 @@ const toggleListening = () =>
 function create(file, options, load) {
   const win = new BrowserWindow({
     show: false,
-    icon: path.join(__dirname, "..", "assets", "brand", "screening.png"),
+    // macOS ignores window icons; decoding this 1254 px PNG still took 6-8 ms per window.
+    ...(process.platform === "darwin"
+      ? {}
+      : { icon: path.join(__dirname, "..", "assets", "brand", "screening.png") }),
     ...options,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -471,8 +524,15 @@ function createBuddy(bounds, memory) {
   }, hash ? { hash } : undefined);
   win.setAlwaysOnTop(true, "screen-saver");
   win.setIgnoreMouseEvents(true, { forward: true });
-  if (process.platform === "darwin")
+  if (process.platform === "darwin") {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    presentations.set(
+      win,
+      require("./services/protected-presentation.cjs").protectPresentation(
+        win, helperPath("protected-presentation.node"), report, state.protection,
+      ),
+    );
+  }
   win.on("close", (event) => {
     if (!quitting) {
       event.preventDefault();
@@ -594,12 +654,29 @@ async function runCapture(capturePath = "electron") {
     buddy.setIgnoreMouseEvents(false);
     buddy.showInactive();
     buddy.moveTop();
+    const prepareSyntheticContent = () => buddy.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 3000;
+        const check = () => {
+          if (!document.getElementById('test-view').hidden &&
+              document.getElementById('island').hidden)
+            requestAnimationFrame(() => requestAnimationFrame(resolve));
+          else if (Date.now() > deadline) reject(new Error('Synthetic card did not render.'));
+          else setTimeout(check, 20);
+        };
+        check();
+      })
+    `);
+    if (buddyPresentation())
+      await buddyPresentation().prepareCaptureTest(prepareSyntheticContent);
+    else await prepareSyntheticContent();
     // Only Buddy, showing a synthetic card, is briefly unprotected.
     buddy.setContentProtection(false);
     await delay(1100);
     const baseline = await cropCapture(display, buddy, capturePath),
       baselineCount = markerPixels(baseline);
     buddy.setContentProtection(true);
+    buddyPresentation()?.setProtection(true);
     await delay(1100);
     const protectedImage = await cropCapture(display, buddy, capturePath),
       protectedCount = markerPixels(protectedImage);
@@ -784,8 +861,10 @@ app
   .whenReady()
   .then(async () => {
     if (process.platform === "darwin") app.dock?.hide();
-    // Buddy's first look already knows whether call audio is allowed.
-    await readCallAudio();
+    // The notch and call-audio helpers run together while the menu and the
+    // engine are set up; Buddy's first look still knows the call audio answer.
+    const firstPlacement = placeBuddy();
+    const callAudioRead = readCallAudio();
     ipcMain.handle("lab:state", (event) =>
       event.senderFrame === engine?.webContents.mainFrame
         ? engineSnapshot(snapshot())
@@ -836,25 +915,49 @@ app
     );
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
-        { label: "Screening", submenu: [{ role: "quit" }] },
+        {
+          label: "Screening",
+          submenu: [
+            { label: "Show Buddy", click: ask },
+            { type: "separator" },
+            {
+              label: "Test Screen Sharing Protection…",
+              click: attempt(captureTest),
+            },
+            { type: "separator" },
+            { role: "quit" },
+          ],
+        },
         { role: "editMenu" },
       ]),
     );
 
-    engine = create("engine.html", {
-      title: "Screening audio engine",
-      width: 320,
-      height: 200,
-      skipTaskbar: true,
-      focusable: false,
-    });
-    buddy = createBuddy(await placeBuddy());
+    // The hidden engine only captures the microphone and Windows call audio
+    // (macOS call audio uses the native tap), so it starts on the first audio
+    // command instead of at launch. Commands wait until it has loaded.
+    let engineLoaded = null;
+    const ensureEngine = () =>
+      (engineLoaded ??= new Promise((resolve) => {
+        engine = create("engine.html", {
+          title: "Screening audio engine",
+          width: 320,
+          height: 200,
+          skipTaskbar: true,
+          focusable: false,
+        });
+        engine.webContents.once("did-finish-load", () => {
+          publish();
+          resolve();
+        });
+      }));
+    const [buddyBounds] = await Promise.all([firstPlacement, callAudioRead]);
+    buddy = createBuddy(buddyBounds);
     for (const event of [
       "display-metrics-changed",
       "display-added",
       "display-removed",
     ])
-      screen.on(event, () => placeBuddy().then(publish).catch(console.error));
+      screen.on(event, placeAfterDisplayChange);
 
     interview = await require("./services/interview.cjs").createInterview(
       app,
@@ -864,7 +967,8 @@ app
         windowCapture:
           new (require("./services/window-capture.cjs").WindowCapture)(() => [
             buddy.getMediaSourceId(),
-            engine.getMediaSourceId(),
+            ...(buddyPresentation() ? [buddyPresentation().getMediaSourceId()] : []),
+            ...(alive(engine) ? [engine.getMediaSourceId()] : []),
           ]),
         getNotes: () => state.notes,
         onLevel: publishAudioLevel,
@@ -874,7 +978,10 @@ app
     // Saved settings may say Buddy floats somewhere; place it there now.
     await placeBuddy();
     audioRouting = new (require("./services/audio-routing.cjs").AudioRouting)(
-      (command) => engine.webContents.send("audio:command", command),
+      (command) =>
+        ensureEngine()
+          .then(() => engine.webContents.send("audio:command", command))
+          .catch((error) => audioRouting.complete(command.id, error.message)),
     );
 
     tray = new Tray(trayImage(false));
@@ -903,7 +1010,7 @@ app
         (w) => alive(w) && event.senderFrame === w.webContents.mainFrame,
       );
     const fromEngine = (event) =>
-      event.senderFrame === engine.webContents.mainFrame;
+      alive(engine) && event.senderFrame === engine.webContents.mainFrame;
     ipcMain.handle("lab:change", (event, key, value) => {
       if (!ownFrame(event)) throw new Error("Untrusted frame");
       return change(key, value);
@@ -980,24 +1087,25 @@ app
       if (!fromEngine(event)) throw new Error("Untrusted frame");
       return interview.audio(buffer);
     });
-    await Promise.all(
-      [buddy, engine].map(
-        (win) =>
-          new Promise((resolve) =>
-            win.webContents.isLoading()
-              ? win.webContents.once("did-finish-load", resolve)
-              : resolve(),
-          ),
-      ),
+    await new Promise((resolve) =>
+      buddy.webContents.isLoading()
+        ? buddy.webContents.once("did-finish-load", resolve)
+        : resolve(),
     );
     publish();
+    if (!verification) ask();
     if (verification) {
+      // The checks exercise the engine directly.
+      await ensureEngine();
       await delay(800);
       await require("./verify.cjs")({
         app,
         // Turning protection off can move Buddy to a new window.
         get buddy() {
           return buddy;
+        },
+        get buddyPresentation() {
+          return buddyPresentation();
         },
         engine,
         tray,
@@ -1028,6 +1136,7 @@ app
   });
 app.on("before-quit", () => {
   quitting = true;
+  for (const win of [buddy, ...retiring]) presentations.get(win)?.stop();
   audioRouting?.close();
   interview?.close();
 });
@@ -1035,5 +1144,5 @@ app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => app.quit());
 for (const event of ["activate", "second-instance"])
   app.on(event, () => {
-    if (alive(buddy)) setHidden(false);
+    if (alive(buddy)) ask();
   });

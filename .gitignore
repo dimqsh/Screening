@@ -13,3 +13,7 @@ settings.json
 INVESTIGATION.md
 rea-evidence/
 code-facts/
+.vercel
+# Agent worktrees and large media never belong in the repository.
+.claude/worktrees/
+marketing/

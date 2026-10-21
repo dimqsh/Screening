@@ -1,0 +1,73 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-15
+            platform: mac
+            arch: arm64
+            app: dist/mac-arm64/Screening.app/Contents/MacOS/Screening
+          - name: macOS x64
+            os: macos-15-intel
+            platform: mac
+            arch: x64
+            app: dist/mac/Screening.app/Contents/MacOS/Screening
+          - name: Windows x64
+            os: windows-latest
+            platform: win
+            arch: x64
+            app: dist/win-unpacked/Screening.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CAPTURE_LAB_ARTIFACTS: ${{ github.workspace }}/validation/ci
+      CAPTURE_LAB_MODEL_CACHE: ${{ github.workspace }}/build/model-cache
+      CAPTURE_LAB_TEST_AUDIO: ${{ github.workspace }}/build/jfk.f32
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build the macOS helpers
+        if: matrix.platform == 'mac'
+        run: node scripts/build-native.cjs ${{ matrix.arch }}
+      # On Intel Macs this also unpacks onnxruntime-node's last Intel binary.
+      - run: node scripts/prepare-runtime.cjs ${{ matrix.arch }}
+      - run: node scripts/prepare-speech-test.cjs
+      - name: Package without publishing
+        run: npx electron-builder --${{ matrix.platform }} dir --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # Check builds are signed ad hoc; releases still require the certificate.
+          SCREENING_ADHOC_SIGN: "1"
+      - name: Run the packaged app with real Whisper
+        if: matrix.platform == 'mac'
+        run: |
+          "${{ matrix.app }}" --verify --interview-test
+          test -f validation/ci/verification.json
+      - name: Run the packaged app with real Whisper
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath "${{ matrix.app }}" -ArgumentList '--verify','--interview-test' -Wait -PassThru
+          if ($app.ExitCode -ne 0) { throw "App verification failed: $($app.ExitCode)" }
+          if (!(Test-Path "validation/ci/verification.json")) { throw 'Verification did not produce its report' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-${{ matrix.platform }}-${{ matrix.arch }}
+          path: validation/ci/
